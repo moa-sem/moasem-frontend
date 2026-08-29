@@ -13,16 +13,21 @@ import {
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RootStackParamList } from '../../navigation/RootNavigator';
 
 const LEAVE_BTN_WIDTH = 84;
 
-type Group = { id: string; name: string; memberCount: number };
+type NavProp = NativeStackNavigationProp<RootStackParamList, 'Home'>;
+
+type Group = { id: string; name: string; memberCount: number; isAdmin: boolean; inviteCode: string };
 
 const MOCK_GROUPS: Group[] = [
-  { id: '1', name: '제주도 여행 계모임', memberCount: 8 },
-  { id: '2', name: '사내 동호회 회비', memberCount: 12 },
-  { id: '3', name: '대학 동기 모임통장', memberCount: 6 },
-  { id: '4', name: '가족 여행 통장', memberCount: 4 },
+  { id: '1', name: '제주도 여행 계모임', memberCount: 8, isAdmin: true, inviteCode: 'JEJU24' },
+  { id: '2', name: '사내 동호회 회비', memberCount: 12, isAdmin: false, inviteCode: 'WORK12' },
+  { id: '3', name: '대학 동기 모임통장', memberCount: 6, isAdmin: true, inviteCode: 'UNIV06' },
+  { id: '4', name: '가족 여행 통장', memberCount: 4, isAdmin: false, inviteCode: 'FAMI04' },
 ];
 
 function GroupAvatar() {
@@ -34,7 +39,7 @@ function GroupAvatar() {
   );
 }
 
-function GroupItem({ group, onLeave }: { group: Group; onLeave: () => void }) {
+function GroupItem({ group, onLeave, onPress }: { group: Group; onLeave: () => void; onPress: () => void }) {
   const translateX = useRef(new Animated.Value(0)).current;
   const offset = useRef(0);
 
@@ -67,11 +72,13 @@ function GroupItem({ group, onLeave }: { group: Group; onLeave: () => void }) {
         <Text style={styles.leaveText}>나가기</Text>
       </TouchableOpacity>
       <Animated.View style={[styles.groupItem, { transform: [{ translateX }] }]} {...panResponder.panHandlers}>
-        <GroupAvatar />
-        <View style={styles.groupInfo}>
-          <Text style={styles.groupName}>{group.name}</Text>
-          <Text style={styles.groupMemberCount}>{group.memberCount}명 참여 중</Text>
-        </View>
+        <TouchableOpacity style={styles.groupItemInner} onPress={onPress} activeOpacity={0.7}>
+          <GroupAvatar />
+          <View style={styles.groupInfo}>
+            <Text style={styles.groupName}>{group.name}</Text>
+            <Text style={styles.groupMemberCount}>{group.memberCount}명 참여 중</Text>
+          </View>
+        </TouchableOpacity>
       </Animated.View>
     </View>
   );
@@ -79,6 +86,7 @@ function GroupItem({ group, onLeave }: { group: Group; onLeave: () => void }) {
 
 export default function Home() {
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation<NavProp>();
   const [modalVisible, setModalVisible] = useState(false);
   const [inviteModalVisible, setInviteModalVisible] = useState(false);
 
@@ -114,7 +122,16 @@ export default function Home() {
 
         <View style={styles.groupList}>
           {MOCK_GROUPS.map((group) => (
-            <GroupItem key={group.id} group={group} onLeave={() => { }} />
+            <GroupItem
+              key={group.id}
+              group={group}
+              onLeave={() => { }}
+              onPress={() => navigation.navigate('GroupDetail', {
+                groupName: group.name,
+                isAdmin: group.isAdmin,
+                inviteCode: group.inviteCode,
+              })}
+            />
           ))}
         </View>
 
@@ -143,7 +160,7 @@ export default function Home() {
           <Feather name="home" size={22} color="#403a6b" />
           <Text style={styles.tabLabelActive}>홈</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.tabItem}>
+        <TouchableOpacity style={styles.tabItem} onPress={() => navigation.navigate('Settings')}>
           <Feather name="settings" size={22} color="#a3a29c" />
           <Text style={styles.tabLabelInactive}>설정</Text>
         </TouchableOpacity>
@@ -300,6 +317,9 @@ const styles = StyleSheet.create({
     top: 0,
     bottom: 0,
     backgroundColor: '#fff',
+  },
+  groupItemInner: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
