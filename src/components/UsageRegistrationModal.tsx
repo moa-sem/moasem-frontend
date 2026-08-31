@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -11,6 +12,7 @@ import {
   TouchableWithoutFeedback,
   View,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 
 const TAGS = ['식비', '숙박비', '교통비', '대관비', '물품비', '기타'];
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
@@ -188,8 +190,28 @@ export default function UsageRegistrationModal({ visible, onClose, onSubmit }: P
   const [description, setDescription] = useState('');
   const [date, setDate] = useState('');
   const [tag, setTag] = useState('식비');
+  const [receiptUri, setReceiptUri] = useState<string | null>(null);
   const [receiptDropdownVisible, setReceiptDropdownVisible] = useState(false);
   const [dateVisible, setDateVisible] = useState(false);
+
+  const pickFromGallery = async () => {
+    setReceiptDropdownVisible(false);
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.8,
+    });
+    if (!result.canceled) setReceiptUri(result.assets[0].uri);
+  };
+
+  const pickFromCamera = async () => {
+    setReceiptDropdownVisible(false);
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') return;
+    const result = await ImagePicker.launchCameraAsync({ quality: 0.8 });
+    if (!result.canceled) setReceiptUri(result.assets[0].uri);
+  };
 
   const canSubmit = amount.trim() && description.trim() && date;
 
@@ -203,6 +225,7 @@ export default function UsageRegistrationModal({ visible, onClose, onSubmit }: P
     setDescription('');
     setDate('');
     setTag('식비');
+    setReceiptUri(null);
     setReceiptDropdownVisible(false);
     setDateVisible(false);
     onClose();
@@ -223,22 +246,33 @@ export default function UsageRegistrationModal({ visible, onClose, onSubmit }: P
             <View style={styles.overlay}>
               <TouchableWithoutFeedback>
                 <View style={styles.card}>
+                  <ScrollView
+                    showsVerticalScrollIndicator={false}
+                    keyboardShouldPersistTaps="handled"
+                    contentContainerStyle={styles.cardContent}
+                  >
                   <Text style={styles.title}>예산 사용</Text>
 
                   {/* 영수증 첨부 */}
                   <View style={styles.receiptWrapper}>
-                    <TouchableOpacity
-                      style={styles.receiptBtn}
-                      onPress={() => setReceiptDropdownVisible(v => !v)}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={styles.receiptBtnText}>영수증 첨부</Text>
-                    </TouchableOpacity>
+                    {receiptUri ? (
+                      <TouchableOpacity onPress={() => setReceiptDropdownVisible(v => !v)} activeOpacity={0.8}>
+                        <Image source={{ uri: receiptUri }} style={styles.receiptPreview} resizeMode="cover" />
+                      </TouchableOpacity>
+                    ) : (
+                      <TouchableOpacity
+                        style={styles.receiptBtn}
+                        onPress={() => setReceiptDropdownVisible(v => !v)}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={styles.receiptBtnText}>영수증 첨부</Text>
+                      </TouchableOpacity>
+                    )}
                     {receiptDropdownVisible && (
                       <View style={styles.receiptDropdown}>
                         <TouchableOpacity
                           style={styles.receiptOption}
-                          onPress={() => setReceiptDropdownVisible(false)}
+                          onPress={pickFromGallery}
                           activeOpacity={0.7}
                         >
                           <Text style={styles.receiptOptionText}>사진 보관함에서 선택</Text>
@@ -246,7 +280,7 @@ export default function UsageRegistrationModal({ visible, onClose, onSubmit }: P
                         <View style={styles.receiptDivider} />
                         <TouchableOpacity
                           style={styles.receiptOption}
-                          onPress={() => setReceiptDropdownVisible(false)}
+                          onPress={pickFromCamera}
                           activeOpacity={0.7}
                         >
                           <Text style={styles.receiptOptionText}>카메라로 촬영</Text>
@@ -322,6 +356,7 @@ export default function UsageRegistrationModal({ visible, onClose, onSubmit }: P
                   >
                     <Text style={styles.submitBtnText}>제출하기</Text>
                   </TouchableOpacity>
+                  </ScrollView>
                 </View>
               </TouchableWithoutFeedback>
             </View>
@@ -349,12 +384,15 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: '#fff',
     borderRadius: 20,
-    padding: 24,
+    maxHeight: '88%',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 20 },
     shadowOpacity: 0.25,
     shadowRadius: 25,
     elevation: 10,
+  },
+  cardContent: {
+    padding: 24,
   },
   title: {
     fontSize: 18,
@@ -374,6 +412,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#fafafa',
+  },
+  receiptPreview: {
+    width: '100%',
+    aspectRatio: 3 / 4,
+    borderRadius: 12,
   },
   receiptBtnText: {
     fontSize: 14,

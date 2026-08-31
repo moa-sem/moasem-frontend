@@ -115,6 +115,7 @@ export default function GroupDetail() {
                 isAdmin,
                 totalBudget: event.totalBudget,
                 remaining: event.remaining,
+                isClosed: event.status === '완료',
               })}
             >
               <View style={styles.eventTopRow}>

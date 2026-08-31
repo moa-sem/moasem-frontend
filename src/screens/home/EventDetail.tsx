@@ -17,6 +17,8 @@ import type { RootStackParamList } from '../../navigation/RootNavigator';
 import ConfirmModal from '../../components/ConfirmModal';
 import CloseEventModal from '../../components/CloseEventModal';
 import UsageRegistrationModal from '../../components/UsageRegistrationModal';
+import EditEventModal from '../../components/EditEventModal';
+import UsageDetailModal from '../../components/UsageDetailModal';
 
 type Tab = '사용내역' | '보류' | '반려';
 
@@ -26,19 +28,20 @@ type UsageItem = {
   amount: string;
   category: string;
   date: string;
+  description?: string;
 };
 
 const MOCK_사용내역: UsageItem[] = [
-  { id: '1', name: '김민준', amount: '150,000원', category: '숙박비', date: '2026.07.12 21:30' },
-  { id: '2', name: '홍길동', amount: '20,000원', category: '식비', date: '2026.07.12 19:04' },
+  { id: '1', name: '김민준', amount: '150,000원', category: '숙박비', date: '2026.07.12 21:30', description: '첫째날 숙박비' },
+  { id: '2', name: '홍길동', amount: '20,000원', category: '식비', date: '2026.07.12 19:04', description: '저녁 식사' },
 ];
 
 const MOCK_보류: UsageItem[] = [
-  { id: '1', name: '이서연', amount: '35,000원', category: '교통비', date: '2026.07.13 09:15' },
+  { id: '3', name: '이서연', amount: '35,000원', category: '교통비', date: '2026.07.13 09:15', description: '렌터카 이동' },
 ];
 
 const MOCK_반려: UsageItem[] = [
-  { id: '1', name: '박지훈', amount: '12,000원', category: '기타', date: '2026.07.13 11:42' },
+  { id: '4', name: '박지훈', amount: '12,000원', category: '기타', date: '2026.07.13 11:42', description: '기타 지출' },
 ];
 
 type NavProp = NativeStackNavigationProp<RootStackParamList, 'EventDetail'>;
@@ -47,7 +50,7 @@ type RoutePropType = RouteProp<RootStackParamList, 'EventDetail'>;
 export default function EventDetail() {
   const navigation = useNavigation<NavProp>();
   const { params } = useRoute<RoutePropType>();
-  const { eventName, isAdmin, totalBudget, remaining, isNew } = params;
+  const { eventName, isAdmin, totalBudget, remaining, isNew, isClosed } = params;
   const insets = useSafeAreaInsets();
 
   const [tab, setTab] = useState<Tab>('사용내역');
@@ -56,6 +59,9 @@ export default function EventDetail() {
   const [deleteBlockedVisible, setDeleteBlockedVisible] = useState(false);
   const [closeEventVisible, setCloseEventVisible] = useState(false);
   const [usageModalVisible, setUsageModalVisible] = useState(false);
+  const [editEventVisible, setEditEventVisible] = useState(false);
+  const [currentEventName, setCurrentEventName] = useState(eventName);
+  const [selectedItem, setSelectedItem] = useState<UsageItem | null>(null);
   const [lists, setLists] = useState<Record<Tab, UsageItem[]>>(
     isNew
       ? { '사용내역': [], '보류': [], '반려': [] }
@@ -91,7 +97,7 @@ export default function EventDetail() {
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerBtn}>
           <Feather name="chevron-left" size={24} color="#2b2b28" style={{ marginLeft: -2 }} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>{eventName}</Text>
+        <Text style={styles.headerTitle} numberOfLines={1}>{currentEventName}</Text>
         {isAdmin ? (
           <TouchableOpacity onPress={() => setMenuVisible(true)} style={styles.headerBtn}>
             <Feather name="more-horizontal" size={22} color="#2b2b28" />
@@ -130,7 +136,7 @@ export default function EventDetail() {
         {/* List */}
         <View style={styles.list}>
           {items.map(item => (
-            <View key={item.id} style={styles.itemCard}>
+            <TouchableOpacity key={item.id} style={styles.itemCard} activeOpacity={0.7} onPress={() => setSelectedItem(item)}>
               <View style={styles.itemTopRow}>
                 <View style={styles.itemLeft}>
                   <View style={styles.itemNameRow}>
@@ -153,17 +159,19 @@ export default function EventDetail() {
                   </View>
                 )}
               </View>
-            </View>
+            </TouchableOpacity>
           ))}
         </View>
       </ScrollView>
 
       {/* Bottom button */}
-      <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 16) }]}>
-        <TouchableOpacity style={styles.useBtn} activeOpacity={0.85} onPress={() => setUsageModalVisible(true)}>
-          <Text style={styles.useBtnText}>예산 사용</Text>
-        </TouchableOpacity>
-      </View>
+      {!isClosed && (
+        <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+          <TouchableOpacity style={styles.useBtn} activeOpacity={0.85} onPress={() => setUsageModalVisible(true)}>
+            <Text style={styles.useBtnText}>예산 사용</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Admin dropdown */}
       <Modal
@@ -184,7 +192,13 @@ export default function EventDetail() {
                   <Text style={styles.menuItemText}>CSV 추출</Text>
                 </TouchableOpacity>
                 <View style={styles.menuDivider} />
-                <TouchableOpacity style={styles.menuItem} onPress={() => setMenuVisible(false)}>
+                <TouchableOpacity
+                  style={styles.menuItem}
+                  onPress={() => {
+                    setMenuVisible(false);
+                    setEditEventVisible(true);
+                  }}
+                >
                   <Text style={styles.menuItemText}>행사 정보 수정</Text>
                 </TouchableOpacity>
                 <View style={styles.menuDivider} />
@@ -218,10 +232,26 @@ export default function EventDetail() {
         </TouchableWithoutFeedback>
       </Modal>
 
+      <UsageDetailModal
+        visible={!!selectedItem}
+        item={selectedItem}
+        onClose={() => setSelectedItem(null)}
+      />
+
+      <EditEventModal
+        visible={editEventVisible}
+        currentName={currentEventName}
+        onClose={() => setEditEventVisible(false)}
+        onEdit={async (name) => {
+          setCurrentEventName(name);
+          // TODO: 백엔드 행사 이름 수정 API 호출
+        }}
+      />
+
       <UsageRegistrationModal
         visible={usageModalVisible}
         onClose={() => setUsageModalVisible(false)}
-        onSubmit={async (data) => {
+        onSubmit={async (_data) => {
           // TODO: 백엔드 사용 등록 API 호출
         }}
       />
