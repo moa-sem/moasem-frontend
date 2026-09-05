@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import CreateGroupModal from '../../components/CreateGroupModal';
 import InviteCodeInputModal from '../../components/InviteCodeInputModal';
 import {
@@ -16,19 +16,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../navigation/RootNavigator';
+import { type Group, createGroup, enterGroup, getGroupList } from '../../api/group';
 
 const LEAVE_BTN_WIDTH = 84;
 
 type NavProp = NativeStackNavigationProp<RootStackParamList, 'Home'>;
-
-type Group = { id: string; name: string; memberCount: number; isAdmin: boolean; inviteCode: string };
-
-const MOCK_GROUPS: Group[] = [
-  { id: '1', name: '제주도 여행 계모임', memberCount: 8, isAdmin: true, inviteCode: 'JEJU24' },
-  { id: '2', name: '사내 동호회 회비', memberCount: 12, isAdmin: false, inviteCode: 'WORK12' },
-  { id: '3', name: '대학 동기 모임통장', memberCount: 6, isAdmin: true, inviteCode: 'UNIV06' },
-  { id: '4', name: '가족 여행 통장', memberCount: 4, isAdmin: false, inviteCode: 'FAMI04' },
-];
 
 function GroupAvatar() {
   return (
@@ -39,7 +31,7 @@ function GroupAvatar() {
   );
 }
 
-function GroupItem({ group, onLeave, onPress }: { group: Group; onLeave: () => void; onPress: () => void }) {
+function GroupItem({ group, onLeave, onPress }: { group: Group; onLeave: () => void; onPress: () => void; }) {
   const translateX = useRef(new Animated.Value(0)).current;
   const offset = useRef(0);
 
@@ -75,8 +67,8 @@ function GroupItem({ group, onLeave, onPress }: { group: Group; onLeave: () => v
         <TouchableOpacity style={styles.groupItemInner} onPress={onPress} activeOpacity={0.7}>
           <GroupAvatar />
           <View style={styles.groupInfo}>
-            <Text style={styles.groupName}>{group.name}</Text>
-            <Text style={styles.groupMemberCount}>{group.memberCount}명 참여 중</Text>
+            <Text style={styles.groupName}>{group.groupName}</Text>
+            <Text style={styles.groupMemberCount}>{group.groupMemberCount}명 참여 중</Text>
           </View>
         </TouchableOpacity>
       </Animated.View>
@@ -89,6 +81,11 @@ export default function Home() {
   const navigation = useNavigation<NavProp>();
   const [modalVisible, setModalVisible] = useState(false);
   const [inviteModalVisible, setInviteModalVisible] = useState(false);
+  const [groups, setGroups] = useState<Group[]>([]);
+
+  useEffect(() => {
+    getGroupList().then(setGroups).catch(() => {});
+  }, []);
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -99,7 +96,7 @@ export default function Home() {
 
         <View style={styles.titleSection}>
           <Text style={styles.titleText}>함께 모으고 있어요</Text>
-          <Text style={styles.subtitleText}>참여 중인 모임 {MOCK_GROUPS.length}개</Text>
+          <Text style={styles.subtitleText}>참여 중인 모임 {groups.length}개</Text>
         </View>
 
         <View style={styles.actionRow}>
@@ -121,15 +118,20 @@ export default function Home() {
         </View>
 
         <View style={styles.groupList}>
-          {MOCK_GROUPS.map((group) => (
+          {groups.length === 0 && (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyText}>아직 시작한 모임이 없습니다.{'\n'}모임을 생성하거나 입장해 보세요!</Text>
+            </View>
+          )}
+          {groups.map((group) => (
             <GroupItem
-              key={group.id}
+              key={group.groupId}
               group={group}
               onLeave={() => { }}
               onPress={() => navigation.navigate('GroupDetail', {
-                groupName: group.name,
-                isAdmin: group.isAdmin,
-                inviteCode: group.inviteCode,
+                groupName: group.groupName,
+                isAdmin: group.isGroupHost,
+                inviteCode: group.joinCode,
               })}
             />
           ))}
@@ -141,17 +143,23 @@ export default function Home() {
       <InviteCodeInputModal
         visible={inviteModalVisible}
         onClose={() => setInviteModalVisible(false)}
-        onSubmit={async (_code) => {
-          // TODO: 백엔드 API 호출 후 성공/실패 반환
-          return false;
+        onSubmit={async (code) => {
+          try {
+            await enterGroup(code);
+            getGroupList().then(setGroups).catch(() => {});
+            return true;
+          } catch {
+            return false;
+          }
         }}
       />
       <CreateGroupModal
         visible={modalVisible}
         onClose={() => setModalVisible(false)}
-        onCreate={async (_name) => {
-          // TODO: 백엔드 API 호출 후 실제 초대코드 반환
-          return 'JEJU24';
+        onCreate={async (name) => {
+          const res = await createGroup(name);
+          getGroupList().then(setGroups).catch(() => {});
+          return res.joinCode;
         }}
       />
 
@@ -348,6 +356,17 @@ const styles = StyleSheet.create({
   groupMemberCount: {
     fontSize: 12.5,
     color: '#a3a29c',
+  },
+
+  emptyState: {
+    paddingVertical: 48,
+    alignItems: 'center',
+  },
+  emptyText: {
+    fontSize: 14,
+    color: '#a3a29c',
+    textAlign: 'center',
+    lineHeight: 22,
   },
 
   // Tab bar
