@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import CreateGroupModal from '../../components/CreateGroupModal';
+import ConfirmModal from '../../components/ConfirmModal';
 import InviteCodeInputModal from '../../components/InviteCodeInputModal';
 import {
   Animated,
@@ -82,6 +83,7 @@ export default function Home() {
   const [modalVisible, setModalVisible] = useState(false);
   const [inviteModalVisible, setInviteModalVisible] = useState(false);
   const [groups, setGroups] = useState<Group[]>([]);
+  const [alreadyJoinedVisible, setAlreadyJoinedVisible] = useState(false);
 
   useEffect(() => {
     getGroupList().then(setGroups).catch(() => {});
@@ -146,12 +148,24 @@ export default function Home() {
         onSubmit={async (code) => {
           try {
             await enterGroup(code);
+            setInviteModalVisible(false);
             getGroupList().then(setGroups).catch(() => {});
             return true;
-          } catch {
+          } catch (e: any) {
+            if (e?.message === '이미 가입된 모임입니다.') {
+              setInviteModalVisible(false);
+              setAlreadyJoinedVisible(true);
+              return true;
+            }
             return false;
           }
         }}
+      />
+      <ConfirmModal
+        visible={alreadyJoinedVisible}
+        title="이미 가입된 모임입니다."
+        message="모임 코드를 다시 확인해 주세요."
+        onConfirm={() => setAlreadyJoinedVisible(false)}
       />
       <CreateGroupModal
         visible={modalVisible}
