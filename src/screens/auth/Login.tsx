@@ -1,13 +1,17 @@
 import { useEffect, useRef } from 'react';
-import { Animated, Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, Animated, Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import * as Google from 'expo-auth-session/providers/google';
-import * as WebBrowser from 'expo-web-browser';
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import * as SecureStore from 'expo-secure-store';
+import { googleLogin } from '../../api/auth';
 import type { RootStackParamList } from '../../navigation/RootNavigator';
 
-WebBrowser.maybeCompleteAuthSession();
+GoogleSignin.configure({
+  iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
+  webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
+});
 
 type NavProp = NativeStackNavigationProp<RootStackParamList, 'Login'>;
 
@@ -17,12 +21,6 @@ export default function LoginScreen() {
   const logoOpacity = useRef(new Animated.Value(0)).current;
   const buttonOpacity = useRef(new Animated.Value(0)).current;
   const buttonTranslateY = useRef(new Animated.Value(60)).current;
-
-  // TODO: Google Cloud Console에서 클라이언트 ID 발급 후 입력
-  const [, response, promptAsync] = Google.useAuthRequest({
-    iosClientId: 'YOUR_IOS_CLIENT_ID',
-    androidClientId: 'YOUR_ANDROID_CLIENT_ID',
-  });
 
   useEffect(() => {
     Animated.sequence([
@@ -34,12 +32,22 @@ export default function LoginScreen() {
     ]).start();
   }, []);
 
-  useEffect(() => {
-    if (response?.type === 'success') {
-      // TODO: 백엔드 로그인 API 호출 후 navigation.replace('Home')
+  const handleGoogleLogin = async () => {
+    try {
+      await GoogleSignin.hasPlayServices();
+      const { data } = await GoogleSignin.signIn();
+      const idToken = data?.idToken;
+      if (!idToken) throw new Error('no idToken');
+
+      const tokens = await googleLogin(idToken);
+      await SecureStore.setItemAsync('accessToken', tokens.accessToken);
+      await SecureStore.setItemAsync('refreshToken', tokens.refreshToken);
       navigation.replace('Home');
+    } catch (e) {
+      console.error('Google login error:', e);
+      Alert.alert('로그인 실패', '다시 시도해주세요.');
     }
-  }, [response]);
+  };
 
   return (
     <View style={styles.container}>
@@ -57,7 +65,7 @@ export default function LoginScreen() {
           { paddingBottom: insets.bottom + 24, opacity: buttonOpacity, transform: [{ translateY: buttonTranslateY }] },
         ]}
       >
-        <TouchableOpacity style={styles.googleButton} onPress={() => promptAsync()} activeOpacity={0.8}>
+        <TouchableOpacity style={styles.googleButton} onPress={handleGoogleLogin} activeOpacity={0.8}>
           <Image source={require('../../../assets/google_logo.png')} style={styles.googleLogo} resizeMode="contain" />
           <Text style={styles.googleText}>Continue with Google</Text>
         </TouchableOpacity>
