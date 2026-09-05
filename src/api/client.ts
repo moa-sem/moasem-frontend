@@ -1,9 +1,9 @@
 import axios, { AxiosError, AxiosRequestConfig, AxiosResponse } from 'axios';
+import * as SecureStore from 'expo-secure-store';
 import type { ApiError, ApiResponse } from '../types/common';
 
-// TODO: 환경별 baseURL 분리 (local/dev/prod) - .env 또는 app.config.ts 활용 예정
 // 실기기·에뮬레이터에서 localhost는 기기 자신을 가리키므로 PC의 LAN IP를 써야 한다.
-const BASE_URL = 'http://localhost:8080';
+const BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8080';
 
 export const api = axios.create({
   baseURL: BASE_URL,
@@ -13,8 +13,11 @@ export const api = axios.create({
   },
 });
 
-// TODO: 인증 토큰 인터셉터 추가 (로그인 구현 후)
-// api.interceptors.request.use((config) => { ... });
+api.interceptors.request.use(async (config) => {
+  const token = await SecureStore.getItemAsync('accessToken');
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
 
 /**
  * 에러를 ApiError 형태로 정규화한다.
