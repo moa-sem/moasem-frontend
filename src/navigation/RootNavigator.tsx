@@ -9,8 +9,10 @@ import Settings from '../screens/settings/Settings';
 export type RootStackParamList = {
   Login: undefined;
   Home: undefined;
-  GroupDetail: { groupName: string; isAdmin: boolean; inviteCode: string };
-  EventDetail: { eventName: string; isAdmin: boolean; totalBudget: string; remaining: string; isNew?: boolean; isClosed?: boolean };
+  GroupDetail: { groupId: number; groupName: string; isAdmin: boolean; inviteCode: string };
+  EventDetail:
+    | { mode: 'api'; groupId: number; eventId: number; isAdmin: boolean }
+    | { mode: 'draft'; eventName: string; isAdmin: boolean; totalBudget: number; remainingBudget: number };
   Settings: undefined;
 };
 

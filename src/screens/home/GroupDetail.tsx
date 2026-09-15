@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Modal,
   ScrollView,
   StyleSheet,
@@ -18,24 +19,34 @@ import type { RootStackParamList } from '../../navigation/RootNavigator';
 import CreateEventModal from '../../components/CreateEventModal';
 import EditGroupModal from '../../components/EditGroupModal';
 import ConfirmModal from '../../components/ConfirmModal';
+import { getEvents, type EventListResponse } from '../../api/event';
+import type { ApiError, EventStatus } from '../../types/common';
 
 type Tab = '전체' | '진행중' | '완료';
-type EventStatus = '완료' | '진행중';
 
-type MoimEvent = {
-  id: string;
-  name: string;
-  status: EventStatus;
-  participants: string;
-  totalBudget: string;
-  remaining: string;
+const TAB_STATUS: Record<Tab, EventStatus | undefined> = {
+  '전체': undefined,
+  '진행중': 'ACTIVE',
+  '완료': 'CLOSED',
 };
 
-const MOCK_EVENTS: MoimEvent[] = [
-  { id: '1', name: '2박 3일 렌터카 여행', status: '완료', participants: '8명 참여', totalBudget: '160만원', remaining: '143만원' },
-  { id: '2', name: '한라산 등반 준비', status: '진행중', participants: '5명 참여', totalBudget: '40만원', remaining: '38.2만원' },
-  { id: '3', name: '연말 숙소 예약', status: '완료', participants: '8명 참여', totalBudget: '90만원', remaining: '90만원' },
-];
+const STATUS_LABEL: Record<EventStatus, string> = {
+  ACTIVE: '진행중',
+  CLOSED: '완료',
+};
+
+const formatWon = (amount: number) => `${amount.toLocaleString('ko-KR')}원`;
+
+const normalizeApiError = (error: unknown): ApiError => {
+  if (typeof error === 'object' && error !== null && 'code' in error && 'message' in error) {
+    return error as ApiError;
+  }
+
+  return {
+    code: 'UNKNOWN_ERROR',
+    message: '행사 목록을 불러오지 못했습니다.',
+  };
+};
 
 type NavProp = NativeStackNavigationProp<RootStackParamList, 'GroupDetail'>;
 type RoutePropType = RouteProp<RootStackParamList, 'GroupDetail'>;
@@ -43,16 +54,42 @@ type RoutePropType = RouteProp<RootStackParamList, 'GroupDetail'>;
 export default function GroupDetail() {
   const navigation = useNavigation<NavProp>();
   const { params } = useRoute<RoutePropType>();
-  const { groupName, isAdmin, inviteCode } = params;
+  const { groupId, groupName, isAdmin, inviteCode } = params;
   const insets = useSafeAreaInsets();
 
   const [tab, setTab] = useState<Tab>('전체');
+  const [events, setEvents] = useState<EventListResponse[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<ApiError | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [menuVisible, setMenuVisible] = useState(false);
   const [eventModalVisible, setEventModalVisible] = useState(false);
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
+  const requestIdRef = useRef(0);
 
-  const filtered = tab === '전체' ? MOCK_EVENTS : MOCK_EVENTS.filter(e => e.status === tab);
+  useEffect(() => {
+    const requestId = ++requestIdRef.current;
+
+    setIsLoading(true);
+    setError(null);
+    setEvents([]);
+
+    getEvents(groupId, TAB_STATUS[tab])
+      .then((response) => {
+        if (requestId === requestIdRef.current) setEvents(response);
+      })
+      .catch((requestError: unknown) => {
+        if (requestId === requestIdRef.current) setError(normalizeApiError(requestError));
+      })
+      .finally(() => {
+        if (requestId === requestIdRef.current) setIsLoading(false);
+      });
+
+    return () => {
+      if (requestId === requestIdRef.current) requestIdRef.current += 1;
+    };
+  }, [groupId, tab, reloadKey]);
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -87,7 +124,7 @@ export default function GroupDetail() {
         {/* Section header */}
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>행사 목록</Text>
-          <Text style={styles.totalLabel}>총 {MOCK_EVENTS.length}개</Text>
+          <Text style={styles.totalLabel}>총 {events.length}개</Text>
         </View>
 
         {/* Tabs */}
@@ -105,33 +142,51 @@ export default function GroupDetail() {
 
         {/* Event list */}
         <View style={styles.eventList}>
-          {filtered.map(event => (
+          {isLoading && (
+            <View style={styles.stateContainer}>
+              <ActivityIndicator color="#403a6b" />
+              <Text style={styles.stateText}>행사 목록을 불러오는 중입니다.</Text>
+            </View>
+          )}
+          {!isLoading && error && (
+            <View style={styles.stateContainer}>
+              <Text style={styles.errorText}>{error.message}</Text>
+              <TouchableOpacity style={styles.retryButton} onPress={() => setReloadKey(key => key + 1)}>
+                <Text style={styles.retryButtonText}>다시 시도</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+          {!isLoading && !error && events.length === 0 && (
+            <View style={styles.stateContainer}>
+              <Text style={styles.stateText}>해당하는 행사가 없습니다.</Text>
+            </View>
+          )}
+          {!isLoading && !error && events.map(event => (
             <TouchableOpacity
-              key={event.id}
+              key={event.eventId}
               style={styles.eventCard}
               activeOpacity={0.7}
               onPress={() => navigation.navigate('EventDetail', {
-                eventName: event.name,
+                mode: 'api',
+                groupId,
+                eventId: event.eventId,
                 isAdmin,
-                totalBudget: event.totalBudget,
-                remaining: event.remaining,
-                isClosed: event.status === '완료',
               })}
             >
               <View style={styles.eventTopRow}>
-                <Text style={styles.eventName}>{event.name}</Text>
-                <View style={[styles.badge, event.status === '진행중' ? styles.badgeOngoing : styles.badgeDone]}>
-                  <Text style={[styles.badgeText, event.status === '진행중' ? styles.badgeTextOngoing : styles.badgeTextDone]}>
-                    {event.status}
+                <Text style={styles.eventName}>{event.title}</Text>
+                <View style={[styles.badge, event.status === 'ACTIVE' ? styles.badgeOngoing : styles.badgeDone]}>
+                  <Text style={[styles.badgeText, event.status === 'ACTIVE' ? styles.badgeTextOngoing : styles.badgeTextDone]}>
+                    {STATUS_LABEL[event.status]}
                   </Text>
                 </View>
               </View>
-              {event.status === '완료' && (
-                <Text style={styles.participantText}>{event.participants}</Text>
+              {event.status === 'CLOSED' && typeof event.participantCount === 'number' && (
+                <Text style={styles.participantText}>{event.participantCount}명 참여</Text>
               )}
               <View style={styles.budgetRow}>
-                <Text style={styles.budgetItem}>총 예산 <Text style={styles.budgetValue}>{event.totalBudget}</Text></Text>
-                <Text style={styles.budgetItem}>남은 금액 <Text style={styles.budgetValue}>{event.remaining}</Text></Text>
+                <Text style={styles.budgetItem}>총 예산 <Text style={styles.budgetValue}>{formatWon(event.totalBudget)}</Text></Text>
+                <Text style={styles.budgetItem}>남은 금액 <Text style={styles.budgetValue}>{formatWon(event.remainingBudget)}</Text></Text>
               </View>
             </TouchableOpacity>
           ))}
@@ -153,11 +208,11 @@ export default function GroupDetail() {
         onCreate={async (name, budget) => {
           setEventModalVisible(false);
           navigation.navigate('EventDetail', {
+            mode: 'draft',
             eventName: name,
             isAdmin: true,
-            totalBudget: `${budget}원`,
-            remaining: `${budget}원`,
-            isNew: true,
+            totalBudget: Number(budget),
+            remainingBudget: Number(budget),
           });
         }}
       />
@@ -332,6 +387,33 @@ const styles = StyleSheet.create({
   eventList: {
     marginHorizontal: 22,
     gap: 10,
+  },
+  stateContainer: {
+    minHeight: 120,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 12,
+  },
+  stateText: {
+    fontSize: 13,
+    color: '#8a8a86',
+    textAlign: 'center',
+  },
+  errorText: {
+    fontSize: 13,
+    color: '#c85c5c',
+    textAlign: 'center',
+  },
+  retryButton: {
+    borderRadius: 10,
+    backgroundColor: '#403a6b',
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+  },
+  retryButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#fff',
   },
   eventCard: {
     backgroundColor: '#fff',

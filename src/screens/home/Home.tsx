@@ -131,6 +131,7 @@ export default function Home() {
               group={group}
               onLeave={() => { }}
               onPress={() => navigation.navigate('GroupDetail', {
+                groupId: group.groupId,
                 groupName: group.groupName,
                 isAdmin: group.isGroupHost,
                 inviteCode: group.joinCode,
