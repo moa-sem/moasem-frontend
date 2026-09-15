@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Modal,
   ScrollView,
   StyleSheet,
@@ -19,6 +20,8 @@ import CloseEventModal from '../../components/CloseEventModal';
 import UsageRegistrationModal from '../../components/UsageRegistrationModal';
 import EditEventModal from '../../components/EditEventModal';
 import UsageDetailModal from '../../components/UsageDetailModal';
+import { getEvent, type EventDetailResponse } from '../../api/event';
+import type { ApiError, EventStatus } from '../../types/common';
 
 type Tab = '사용내역' | '보류' | '반려';
 
@@ -47,12 +50,34 @@ const MOCK_반려: UsageItem[] = [
 type NavProp = NativeStackNavigationProp<RootStackParamList, 'EventDetail'>;
 type RoutePropType = RouteProp<RootStackParamList, 'EventDetail'>;
 
+const STATUS_LABEL: Record<EventStatus, string> = {
+  ACTIVE: '진행중',
+  CLOSED: '완료',
+};
+
+const formatWon = (amount: number) => `${amount.toLocaleString('ko-KR')}원`;
+
+const normalizeApiError = (error: unknown): ApiError => {
+  if (typeof error === 'object' && error !== null && 'code' in error && 'message' in error) {
+    return error as ApiError;
+  }
+
+  return {
+    code: 'UNKNOWN_ERROR',
+    message: '행사 정보를 불러오지 못했습니다.',
+  };
+};
+
 export default function EventDetail() {
   const navigation = useNavigation<NavProp>();
   const { params } = useRoute<RoutePropType>();
-  const { eventName, isAdmin, totalBudget, remaining, isNew, isClosed } = params;
+  const { isAdmin } = params;
   const insets = useSafeAreaInsets();
 
+  const [event, setEvent] = useState<EventDetailResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(params.mode === 'api');
+  const [error, setError] = useState<ApiError | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [tab, setTab] = useState<Tab>('사용내역');
   const [menuVisible, setMenuVisible] = useState(false);
   const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
@@ -60,13 +85,58 @@ export default function EventDetail() {
   const [closeEventVisible, setCloseEventVisible] = useState(false);
   const [usageModalVisible, setUsageModalVisible] = useState(false);
   const [editEventVisible, setEditEventVisible] = useState(false);
-  const [currentEventName, setCurrentEventName] = useState(eventName);
+  const [editedEventName, setEditedEventName] = useState<string | null>(null);
   const [selectedItem, setSelectedItem] = useState<UsageItem | null>(null);
   const [lists, setLists] = useState<Record<Tab, UsageItem[]>>(
-    isNew
+    params.mode === 'draft'
       ? { '사용내역': [], '보류': [], '반려': [] }
       : { '사용내역': MOCK_사용내역, '보류': MOCK_보류, '반려': MOCK_반려 }
   );
+  const requestIdRef = useRef(0);
+
+  const groupId = params.mode === 'api' ? params.groupId : null;
+  const eventId = params.mode === 'api' ? params.eventId : null;
+
+  useEffect(() => {
+    if (groupId === null || eventId === null) {
+      setIsLoading(false);
+      setError(null);
+      return;
+    }
+
+    const requestId = ++requestIdRef.current;
+
+    setIsLoading(true);
+    setError(null);
+
+    getEvent(groupId, eventId)
+      .then((response) => {
+        if (requestId === requestIdRef.current) {
+          setEvent(response);
+          setEditedEventName(null);
+        }
+      })
+      .catch((requestError: unknown) => {
+        if (requestId === requestIdRef.current) setError(normalizeApiError(requestError));
+      })
+      .finally(() => {
+        if (requestId === requestIdRef.current) setIsLoading(false);
+      });
+
+    return () => {
+      if (requestId === requestIdRef.current) requestIdRef.current += 1;
+    };
+  }, [eventId, groupId, reloadKey]);
+
+  const eventName = editedEventName
+    ?? event?.title
+    ?? (params.mode === 'draft' ? params.eventName : '행사 상세');
+  const totalBudget = event?.totalBudget
+    ?? (params.mode === 'draft' ? params.totalBudget : 0);
+  const remainingBudget = event?.remainingBudget
+    ?? (params.mode === 'draft' ? params.remainingBudget : 0);
+  const eventStatus: EventStatus | null = event?.status
+    ?? (params.mode === 'draft' ? 'ACTIVE' : null);
 
   const items = lists[tab];
 
@@ -97,7 +167,7 @@ export default function EventDetail() {
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerBtn}>
           <Feather name="chevron-left" size={24} color="#2b2b28" style={{ marginLeft: -2 }} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>{currentEventName}</Text>
+        <Text style={styles.headerTitle} numberOfLines={1}>{eventName}</Text>
         {isAdmin ? (
           <TouchableOpacity onPress={() => setMenuVisible(true)} style={styles.headerBtn}>
             <Feather name="more-horizontal" size={22} color="#2b2b28" />
@@ -108,64 +178,91 @@ export default function EventDetail() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 100 }}>
-        {/* Budget cards */}
-        <View style={styles.budgetRow}>
-          <View style={styles.budgetCard}>
-            <Text style={styles.budgetLabel}>총 예산</Text>
-            <Text style={styles.budgetAmount}>{totalBudget}</Text>
+        {isLoading ? (
+          <View style={styles.stateContainer}>
+            <ActivityIndicator color="#403a6b" />
+            <Text style={styles.stateText}>행사 정보를 불러오는 중입니다.</Text>
           </View>
-          <View style={styles.budgetCard}>
-            <Text style={styles.budgetLabel}>남은 금액</Text>
-            <Text style={styles.budgetAmount}>{remaining}</Text>
-          </View>
-        </View>
-
-        {/* Tabs */}
-        <View style={styles.tabRow}>
-          {(['사용내역', '보류', '반려'] as Tab[]).map(t => (
-            <TouchableOpacity
-              key={t}
-              style={[styles.tab, tab === t && styles.tabActive]}
-              onPress={() => setTab(t)}
-            >
-              <Text style={[styles.tabText, tab === t && styles.tabTextActive]}>{t}</Text>
+        ) : error ? (
+          <View style={styles.stateContainer}>
+            <Text style={styles.errorText}>{error.message}</Text>
+            <TouchableOpacity style={styles.retryButton} onPress={() => setReloadKey(key => key + 1)}>
+              <Text style={styles.retryButtonText}>다시 시도</Text>
             </TouchableOpacity>
-          ))}
-        </View>
-
-        {/* List */}
-        <View style={styles.list}>
-          {items.map(item => (
-            <TouchableOpacity key={item.id} style={styles.itemCard} activeOpacity={0.7} onPress={() => setSelectedItem(item)}>
-              <View style={styles.itemTopRow}>
-                <View style={styles.itemLeft}>
-                  <View style={styles.itemNameRow}>
-                    <Text style={styles.itemName}>{item.name}</Text>
-                    <Text style={styles.itemAmount}>{item.amount}</Text>
-                    <View style={styles.categoryTag}>
-                      <Text style={styles.categoryText}># {item.category}</Text>
-                    </View>
-                  </View>
-                  <Text style={styles.itemDate}>{item.date}</Text>
-                </View>
-                {isAdmin && tab === '보류' && (
-                  <View style={styles.actionButtons}>
-                    <TouchableOpacity style={styles.approveBtn} onPress={() => handleApprove(item)}>
-                      <Text style={styles.approveBtnText}>승인</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.rejectBtn} onPress={() => handleReject(item)}>
-                      <Text style={styles.rejectBtnText}>반려</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
+          </View>
+        ) : (
+          <>
+            {/* Budget cards */}
+            <View style={styles.budgetRow}>
+              <View style={styles.budgetCard}>
+                <Text style={styles.budgetLabel}>총 예산</Text>
+                <Text style={styles.budgetAmount}>{formatWon(totalBudget)}</Text>
               </View>
-            </TouchableOpacity>
-          ))}
-        </View>
+              <View style={styles.budgetCard}>
+                <Text style={styles.budgetLabel}>남은 금액</Text>
+                <Text style={styles.budgetAmount}>{formatWon(remainingBudget)}</Text>
+              </View>
+            </View>
+
+            {eventStatus && (
+              <View style={styles.statusRow}>
+                <Text style={styles.statusLabel}>행사 상태</Text>
+                <View style={[styles.statusBadge, eventStatus === 'ACTIVE' ? styles.statusBadgeActive : styles.statusBadgeClosed]}>
+                  <Text style={[styles.statusText, eventStatus === 'ACTIVE' ? styles.statusTextActive : styles.statusTextClosed]}>
+                    {STATUS_LABEL[eventStatus]}
+                  </Text>
+                </View>
+              </View>
+            )}
+
+            {/* Tabs */}
+            <View style={styles.tabRow}>
+              {(['사용내역', '보류', '반려'] as Tab[]).map(t => (
+                <TouchableOpacity
+                  key={t}
+                  style={[styles.tab, tab === t && styles.tabActive]}
+                  onPress={() => setTab(t)}
+                >
+                  <Text style={[styles.tabText, tab === t && styles.tabTextActive]}>{t}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {/* List */}
+            <View style={styles.list}>
+              {items.map(item => (
+                <TouchableOpacity key={item.id} style={styles.itemCard} activeOpacity={0.7} onPress={() => setSelectedItem(item)}>
+                  <View style={styles.itemTopRow}>
+                    <View style={styles.itemLeft}>
+                      <View style={styles.itemNameRow}>
+                        <Text style={styles.itemName}>{item.name}</Text>
+                        <Text style={styles.itemAmount}>{item.amount}</Text>
+                        <View style={styles.categoryTag}>
+                          <Text style={styles.categoryText}># {item.category}</Text>
+                        </View>
+                      </View>
+                      <Text style={styles.itemDate}>{item.date}</Text>
+                    </View>
+                    {isAdmin && tab === '보류' && (
+                      <View style={styles.actionButtons}>
+                        <TouchableOpacity style={styles.approveBtn} onPress={() => handleApprove(item)}>
+                          <Text style={styles.approveBtnText}>승인</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.rejectBtn} onPress={() => handleReject(item)}>
+                          <Text style={styles.rejectBtnText}>반려</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>
+        )}
       </ScrollView>
 
       {/* Bottom button */}
-      {!isClosed && (
+      {!isLoading && !error && eventStatus === 'ACTIVE' && (
         <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 16) }]}>
           <TouchableOpacity style={styles.useBtn} activeOpacity={0.85} onPress={() => setUsageModalVisible(true)}>
             <Text style={styles.useBtnText}>예산 사용</Text>
@@ -240,10 +337,10 @@ export default function EventDetail() {
 
       <EditEventModal
         visible={editEventVisible}
-        currentName={currentEventName}
+        currentName={eventName}
         onClose={() => setEditEventVisible(false)}
         onEdit={async (name) => {
-          setCurrentEventName(name);
+          setEditedEventName(name);
           // TODO: 백엔드 행사 이름 수정 API 호출
         }}
       />
@@ -341,6 +438,70 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     color: '#2b2b28',
+  },
+  stateContainer: {
+    minHeight: 220,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 22,
+  },
+  stateText: {
+    fontSize: 13,
+    color: '#8a8a86',
+    textAlign: 'center',
+  },
+  errorText: {
+    fontSize: 13,
+    color: '#c85c5c',
+    textAlign: 'center',
+  },
+  retryButton: {
+    borderRadius: 10,
+    backgroundColor: '#403a6b',
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+  },
+  retryButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginHorizontal: 22,
+    marginTop: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: '#fff',
+  },
+  statusLabel: {
+    fontSize: 13,
+    color: '#8a8a86',
+  },
+  statusBadge: {
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+  },
+  statusBadgeActive: {
+    backgroundColor: '#eaeef3',
+  },
+  statusBadgeClosed: {
+    backgroundColor: '#eef0f2',
+  },
+  statusText: {
+    fontSize: 11.5,
+    fontWeight: '700',
+  },
+  statusTextActive: {
+    color: '#403a6b',
+  },
+  statusTextClosed: {
+    color: '#8a8a86',
   },
 
   // Tabs
