@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
@@ -10,7 +10,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RouteProp } from '@react-navigation/native';
 import Feather from '@expo/vector-icons/Feather';
@@ -76,28 +76,30 @@ export default function GroupDetail() {
     };
   }, []);
 
-  useEffect(() => {
-    const requestId = ++requestIdRef.current;
+  useFocusEffect(
+    useCallback(() => {
+      const requestId = ++requestIdRef.current;
 
-    setIsLoading(true);
-    setError(null);
-    setEvents([]);
+      setIsLoading(true);
+      setError(null);
+      setEvents([]);
 
-    getEvents(groupId, TAB_STATUS[tab])
-      .then((response) => {
-        if (requestId === requestIdRef.current) setEvents(response);
-      })
-      .catch((requestError: unknown) => {
-        if (requestId === requestIdRef.current) setError(normalizeApiError(requestError));
-      })
-      .finally(() => {
-        if (requestId === requestIdRef.current) setIsLoading(false);
-      });
+      getEvents(groupId, TAB_STATUS[tab])
+        .then((response) => {
+          if (requestId === requestIdRef.current) setEvents(response);
+        })
+        .catch((requestError: unknown) => {
+          if (requestId === requestIdRef.current) setError(normalizeApiError(requestError));
+        })
+        .finally(() => {
+          if (requestId === requestIdRef.current) setIsLoading(false);
+        });
 
-    return () => {
-      if (requestId === requestIdRef.current) requestIdRef.current += 1;
-    };
-  }, [groupId, tab, reloadKey]);
+      return () => {
+        if (requestId === requestIdRef.current) requestIdRef.current += 1;
+      };
+    }, [groupId, tab, reloadKey]),
+  );
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -217,7 +219,6 @@ export default function GroupDetail() {
           if (!isMountedRef.current) return;
 
           setTab('전체');
-          setReloadKey(key => key + 1);
           setEventModalVisible(false);
           navigation.navigate('EventDetail', {
             groupId: createdEvent.groupId,
