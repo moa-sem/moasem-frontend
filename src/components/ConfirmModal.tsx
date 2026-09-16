@@ -1,4 +1,5 @@
 import {
+  ActivityIndicator,
   Modal,
   StyleSheet,
   Text,
@@ -14,6 +15,9 @@ type Props = {
   cancelText?: string;
   onConfirm: () => void;
   onCancel?: () => void;
+  isLoading?: boolean;
+  disabled?: boolean;
+  errorMessage?: string;
 };
 
 export default function ConfirmModal({
@@ -24,30 +28,51 @@ export default function ConfirmModal({
   cancelText,
   onConfirm,
   onCancel,
+  isLoading = false,
+  disabled = false,
+  errorMessage,
 }: Props) {
+  const isInteractionDisabled = isLoading || disabled;
+
   return (
     <Modal
       visible={visible}
       transparent
       animationType="fade"
-      onRequestClose={onCancel ?? onConfirm}
+      onRequestClose={isInteractionDisabled ? () => undefined : (onCancel ?? onConfirm)}
     >
       <View style={styles.overlay}>
         <View style={styles.card}>
           <Text style={styles.title}>{title}</Text>
           <Text style={styles.message}>{message}</Text>
+          {errorMessage && <Text style={styles.errorMessage}>{errorMessage}</Text>}
           <View style={styles.btnRow}>
             {cancelText && (
-              <TouchableOpacity style={[styles.btn, styles.btnCancel]} onPress={onCancel} activeOpacity={0.8}>
+              <TouchableOpacity
+                style={[styles.btn, styles.btnCancel, isInteractionDisabled && styles.btnDisabled]}
+                onPress={onCancel}
+                activeOpacity={0.8}
+                disabled={isInteractionDisabled}
+              >
                 <Text style={styles.btnCancelText}>{cancelText}</Text>
               </TouchableOpacity>
             )}
             <TouchableOpacity
-              style={[styles.btn, styles.btnConfirm, !cancelText && styles.btnFull]}
+              style={[
+                styles.btn,
+                styles.btnConfirm,
+                !cancelText && styles.btnFull,
+                isInteractionDisabled && styles.btnDisabled,
+              ]}
               onPress={onConfirm}
               activeOpacity={0.8}
+              disabled={isInteractionDisabled}
             >
-              <Text style={styles.btnConfirmText}>{confirmText}</Text>
+              {isLoading ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.btnConfirmText}>{confirmText}</Text>
+              )}
             </TouchableOpacity>
           </View>
         </View>
@@ -87,6 +112,13 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 24,
   },
+  errorMessage: {
+    fontSize: 13,
+    color: '#c85c5c',
+    textAlign: 'center',
+    marginTop: -12,
+    marginBottom: 24,
+  },
   btnRow: {
     flexDirection: 'row',
     gap: 10,
@@ -101,6 +133,9 @@ const styles = StyleSheet.create({
   },
   btnFull: {
     flex: 1,
+  },
+  btnDisabled: {
+    opacity: 0.55,
   },
   btnCancel: {
     backgroundColor: '#eef0f2',

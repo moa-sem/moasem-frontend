@@ -23,8 +23,12 @@ import UsageDetailModal from '../../components/UsageDetailModal';
 import BudgetAdditionModal from '../../components/BudgetAdditionModal';
 import {
   addBudgetAddition,
+  closeEvent,
+  deleteEvent,
   getEvent,
+  previewEventClose,
   type CreateBudgetAdditionRequest,
+  type EventClosePreviewResponse,
   type EventDetailResponse,
 } from '../../api/event';
 import type { ApiError, EventStatus } from '../../types/common';
@@ -86,13 +90,19 @@ export default function EventDetail() {
   const [event, setEvent] = useState<EventDetailResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<ApiError | null>(null);
-  const [refreshError, setRefreshError] = useState<ApiError | null>(null);
+  const [refreshWarning, setRefreshWarning] = useState<{ title: string; message: string } | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [tab, setTab] = useState<Tab>('사용내역');
   const [menuVisible, setMenuVisible] = useState(false);
   const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
-  const [deleteBlockedVisible, setDeleteBlockedVisible] = useState(false);
+  const [deleteError, setDeleteError] = useState<ApiError | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [closeEventVisible, setCloseEventVisible] = useState(false);
+  const [closePreview, setClosePreview] = useState<EventClosePreviewResponse | null>(null);
+  const [closeError, setCloseError] = useState<ApiError | null>(null);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [isClosing, setIsClosing] = useState(false);
+  const [closeSucceeded, setCloseSucceeded] = useState(false);
   const [usageModalVisible, setUsageModalVisible] = useState(false);
   const [budgetAdditionVisible, setBudgetAdditionVisible] = useState(false);
   const [editEventVisible, setEditEventVisible] = useState(false);
@@ -103,7 +113,11 @@ export default function EventDetail() {
     '보류': MOCK_보류,
     '반려': MOCK_반려,
   });
-  const requestIdRef = useRef(0);
+  const detailRequestIdRef = useRef(0);
+  const previewRequestIdRef = useRef(0);
+  const isDeletingRef = useRef(false);
+  const isPreviewLoadingRef = useRef(false);
+  const isClosingRef = useRef(false);
   const isMountedRef = useRef(true);
 
   useEffect(() => {
@@ -114,28 +128,32 @@ export default function EventDetail() {
   }, []);
 
   useEffect(() => {
-    const requestId = ++requestIdRef.current;
+    setCloseSucceeded(false);
+  }, [eventId, groupId]);
+
+  useEffect(() => {
+    const requestId = ++detailRequestIdRef.current;
 
     setIsLoading(true);
     setError(null);
-    setRefreshError(null);
+    setRefreshWarning(null);
 
     getEvent(groupId, eventId)
       .then((response) => {
-        if (requestId === requestIdRef.current) {
+        if (requestId === detailRequestIdRef.current) {
           setEvent(response);
           setEditedEventName(null);
         }
       })
       .catch((requestError: unknown) => {
-        if (requestId === requestIdRef.current) setError(normalizeApiError(requestError));
+        if (requestId === detailRequestIdRef.current) setError(normalizeApiError(requestError));
       })
       .finally(() => {
-        if (requestId === requestIdRef.current) setIsLoading(false);
+        if (requestId === detailRequestIdRef.current) setIsLoading(false);
       });
 
     return () => {
-      if (requestId === requestIdRef.current) requestIdRef.current += 1;
+      if (requestId === detailRequestIdRef.current) detailRequestIdRef.current += 1;
     };
   }, [eventId, groupId, reloadKey]);
 
@@ -145,6 +163,7 @@ export default function EventDetail() {
   const totalBudget = event?.totalBudget ?? 0;
   const remainingBudget = event?.remainingBudget ?? 0;
   const eventStatus: EventStatus | null = event?.status ?? null;
+  const isActionableActive = eventStatus === 'ACTIVE' && !closeSucceeded;
 
   const items = lists[tab];
 
@@ -173,22 +192,138 @@ export default function EventDetail() {
     if (!isMountedRef.current) return;
 
     setBudgetAdditionVisible(false);
-    setRefreshError(null);
+    setRefreshWarning(null);
 
-    const requestId = ++requestIdRef.current;
+    const requestId = ++detailRequestIdRef.current;
     try {
       const refreshedEvent = await getEvent(groupId, eventId);
-      if (isMountedRef.current && requestId === requestIdRef.current) {
+      if (isMountedRef.current && requestId === detailRequestIdRef.current) {
         setEvent(refreshedEvent);
       }
     } catch (requestError: unknown) {
-      if (isMountedRef.current && requestId === requestIdRef.current) {
-        setRefreshError(normalizeApiError(
+      if (isMountedRef.current && requestId === detailRequestIdRef.current) {
+        const normalizedError = normalizeApiError(
           requestError,
           '추가 예산은 등록되었지만 최신 예산 정보를 불러오지 못했습니다.',
-        ));
+        );
+        setRefreshWarning({
+          title: '예산 정보 갱신 실패',
+          message: normalizedError.message,
+        });
       }
     }
+  };
+
+  const handleDelete = async () => {
+    if (isDeletingRef.current || closeSucceeded) return;
+
+    isDeletingRef.current = true;
+    setIsDeleting(true);
+    setDeleteError(null);
+
+    try {
+      await deleteEvent(groupId, eventId);
+      if (!isMountedRef.current) return;
+
+      setDeleteConfirmVisible(false);
+      navigation.goBack();
+    } catch (requestError: unknown) {
+      if (isMountedRef.current) {
+        setDeleteError(normalizeApiError(requestError, '행사를 삭제하지 못했습니다.'));
+      }
+    } finally {
+      isDeletingRef.current = false;
+      if (isMountedRef.current) setIsDeleting(false);
+    }
+  };
+
+  const invalidateClosePreview = () => {
+    previewRequestIdRef.current += 1;
+    setClosePreview(null);
+    setCloseError(null);
+  };
+
+  const handleClosePreview = async (participantCount: number) => {
+    if (isPreviewLoadingRef.current || isClosingRef.current || closeSucceeded) return;
+
+    const requestId = ++previewRequestIdRef.current;
+    isPreviewLoadingRef.current = true;
+    setIsPreviewLoading(true);
+    setClosePreview(null);
+    setCloseError(null);
+
+    try {
+      const preview = await previewEventClose(groupId, eventId, { participantCount });
+      if (isMountedRef.current && requestId === previewRequestIdRef.current) {
+        setClosePreview(preview);
+      }
+    } catch (requestError: unknown) {
+      if (isMountedRef.current && requestId === previewRequestIdRef.current) {
+        setCloseError(normalizeApiError(requestError, '마감 정보를 확인하지 못했습니다.'));
+      }
+    } finally {
+      isPreviewLoadingRef.current = false;
+      if (isMountedRef.current && requestId === previewRequestIdRef.current) {
+        setIsPreviewLoading(false);
+      }
+    }
+  };
+
+  const handleCloseEvent = async (participantCount: number) => {
+    if (
+      isClosingRef.current
+      || isPreviewLoadingRef.current
+      || closeSucceeded
+      || closePreview?.participantCount !== participantCount
+    ) return;
+
+    isClosingRef.current = true;
+    setIsClosing(true);
+    setCloseError(null);
+
+    try {
+      await closeEvent(groupId, eventId, { participantCount });
+      if (!isMountedRef.current) return;
+
+      setCloseSucceeded(true);
+      setCloseEventVisible(false);
+      setClosePreview(null);
+      setRefreshWarning(null);
+
+      const requestId = ++detailRequestIdRef.current;
+      try {
+        const refreshedEvent = await getEvent(groupId, eventId);
+        if (isMountedRef.current && requestId === detailRequestIdRef.current) {
+          setEvent(refreshedEvent);
+        }
+      } catch (requestError: unknown) {
+        if (isMountedRef.current && requestId === detailRequestIdRef.current) {
+          const normalizedError = normalizeApiError(
+            requestError,
+            '행사는 마감되었지만 최신 행사 정보를 불러오지 못했습니다.',
+          );
+          setRefreshWarning({
+            title: '행사 정보 갱신 실패',
+            message: normalizedError.message,
+          });
+        }
+      }
+    } catch (requestError: unknown) {
+      if (isMountedRef.current) {
+        setCloseError(normalizeApiError(requestError, '행사를 마감하지 못했습니다.'));
+      }
+    } finally {
+      isClosingRef.current = false;
+      if (isMountedRef.current) setIsClosing(false);
+    }
+  };
+
+  const handleCloseModal = () => {
+    if (isPreviewLoadingRef.current || isClosingRef.current) return;
+    previewRequestIdRef.current += 1;
+    setCloseEventVisible(false);
+    setClosePreview(null);
+    setCloseError(null);
   };
 
   return (
@@ -246,12 +381,12 @@ export default function EventDetail() {
               </View>
             )}
 
-            {refreshError && (
+            {refreshWarning && (
               <View style={styles.refreshErrorCard}>
                 <Feather name="alert-circle" size={16} color="#c85c5c" />
                 <View style={styles.refreshErrorContent}>
-                  <Text style={styles.refreshErrorTitle}>예산 정보 갱신 실패</Text>
-                  <Text style={styles.refreshErrorText}>{refreshError.message}</Text>
+                  <Text style={styles.refreshErrorTitle}>{refreshWarning.title}</Text>
+                  <Text style={styles.refreshErrorText}>{refreshWarning.message}</Text>
                 </View>
               </View>
             )}
@@ -303,7 +438,7 @@ export default function EventDetail() {
       </ScrollView>
 
       {/* Bottom button */}
-      {!isLoading && !error && eventStatus === 'ACTIVE' && (
+      {!isLoading && !error && isActionableActive && (
         <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 16) }]}>
           <TouchableOpacity style={styles.useBtn} activeOpacity={0.85} onPress={() => setUsageModalVisible(true)}>
             <Text style={styles.useBtnText}>예산 사용</Text>
@@ -322,7 +457,7 @@ export default function EventDetail() {
           <View style={styles.menuOverlay}>
             <TouchableWithoutFeedback>
               <View style={[styles.menuCard, { top: insets.top + 48 }]}>
-                {eventStatus === 'ACTIVE' && (
+                {isActionableActive && (
                   <>
                     <TouchableOpacity
                       style={styles.menuItem}
@@ -353,31 +488,33 @@ export default function EventDetail() {
                 >
                   <Text style={styles.menuItemText}>행사 정보 수정</Text>
                 </TouchableOpacity>
-                <View style={styles.menuDivider} />
-                <TouchableOpacity
-                  style={styles.menuItem}
-                  onPress={() => {
-                    setMenuVisible(false);
-                    setCloseEventVisible(true);
-                  }}
-                >
-                  <Text style={styles.menuItemText}>행사 마감</Text>
-                </TouchableOpacity>
-                <View style={styles.menuDivider} />
-                <TouchableOpacity
-                  style={styles.menuItem}
-                  onPress={() => {
-                    setMenuVisible(false);
-                    const hasItems = Object.values(lists).some(l => l.length > 0);
-                    if (hasItems) {
-                      setDeleteBlockedVisible(true);
-                    } else {
-                      setDeleteConfirmVisible(true);
-                    }
-                  }}
-                >
-                  <Text style={[styles.menuItemText, styles.menuItemDanger]}>행사 삭제</Text>
-                </TouchableOpacity>
+                {isActionableActive && (
+                  <>
+                    <View style={styles.menuDivider} />
+                    <TouchableOpacity
+                      style={styles.menuItem}
+                      onPress={() => {
+                        setMenuVisible(false);
+                        setClosePreview(null);
+                        setCloseError(null);
+                        setCloseEventVisible(true);
+                      }}
+                    >
+                      <Text style={styles.menuItemText}>행사 마감</Text>
+                    </TouchableOpacity>
+                    <View style={styles.menuDivider} />
+                    <TouchableOpacity
+                      style={styles.menuItem}
+                      onPress={() => {
+                        setMenuVisible(false);
+                        setDeleteError(null);
+                        setDeleteConfirmVisible(true);
+                      }}
+                    >
+                      <Text style={[styles.menuItemText, styles.menuItemDanger]}>행사 삭제</Text>
+                    </TouchableOpacity>
+                  </>
+                )}
               </View>
             </TouchableWithoutFeedback>
           </View>
@@ -416,10 +553,14 @@ export default function EventDetail() {
 
       <CloseEventModal
         visible={closeEventVisible}
-        onClose={() => setCloseEventVisible(false)}
-        onConfirm={async (_count) => {
-          // TODO: 백엔드 행사 마감 API 호출
-        }}
+        preview={closePreview}
+        isPreviewLoading={isPreviewLoading}
+        isClosing={isClosing}
+        errorMessage={closeError?.message}
+        onClose={handleCloseModal}
+        onParticipantCountChange={invalidateClosePreview}
+        onPreview={handleClosePreview}
+        onConfirm={handleCloseEvent}
       />
 
       <ConfirmModal
@@ -428,20 +569,14 @@ export default function EventDetail() {
         message="삭제하면 되돌릴 수 없어요"
         confirmText="예"
         cancelText="아니오"
-        onConfirm={() => {
+        isLoading={isDeleting}
+        errorMessage={deleteError?.message}
+        onConfirm={handleDelete}
+        onCancel={() => {
+          if (isDeletingRef.current) return;
           setDeleteConfirmVisible(false);
-          // TODO: 백엔드 삭제 API 호출
-          navigation.goBack();
+          setDeleteError(null);
         }}
-        onCancel={() => setDeleteConfirmVisible(false)}
-      />
-
-      <ConfirmModal
-        visible={deleteBlockedVisible}
-        title="삭제할 수 없어요"
-        message={'이미 진행중인 행사이기 때문에\n삭제가 불가능합니다.'}
-        confirmText="확인"
-        onConfirm={() => setDeleteBlockedVisible(false)}
       />
     </View>
   );
