@@ -10,9 +10,7 @@ export type RootStackParamList = {
   Login: undefined;
   Home: undefined;
   GroupDetail: { groupId: number; groupName: string; isAdmin: boolean; inviteCode: string };
-  EventDetail:
-    | { mode: 'api'; groupId: number; eventId: number; isAdmin: boolean }
-    | { mode: 'draft'; eventName: string; isAdmin: boolean; totalBudget: number; remainingBudget: number };
+  EventDetail: { groupId: number; eventId: number; isAdmin: boolean };
   Settings: undefined;
 };
 

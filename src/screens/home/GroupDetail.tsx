@@ -19,7 +19,7 @@ import type { RootStackParamList } from '../../navigation/RootNavigator';
 import CreateEventModal from '../../components/CreateEventModal';
 import EditGroupModal from '../../components/EditGroupModal';
 import ConfirmModal from '../../components/ConfirmModal';
-import { getEvents, type EventListResponse } from '../../api/event';
+import { createEvent, getEvents, type EventListResponse } from '../../api/event';
 import type { ApiError, EventStatus } from '../../types/common';
 
 type Tab = '전체' | '진행중' | '완료';
@@ -67,6 +67,14 @@ export default function GroupDetail() {
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
   const requestIdRef = useRef(0);
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     const requestId = ++requestIdRef.current;
@@ -167,7 +175,6 @@ export default function GroupDetail() {
               style={styles.eventCard}
               activeOpacity={0.7}
               onPress={() => navigation.navigate('EventDetail', {
-                mode: 'api',
                 groupId,
                 eventId: event.eventId,
                 isAdmin,
@@ -205,14 +212,17 @@ export default function GroupDetail() {
       <CreateEventModal
         visible={eventModalVisible}
         onClose={() => setEventModalVisible(false)}
-        onCreate={async (name, budget) => {
+        onCreate={async (request) => {
+          const createdEvent = await createEvent(groupId, request);
+          if (!isMountedRef.current) return;
+
+          setTab('전체');
+          setReloadKey(key => key + 1);
           setEventModalVisible(false);
           navigation.navigate('EventDetail', {
-            mode: 'draft',
-            eventName: name,
-            isAdmin: true,
-            totalBudget: Number(budget),
-            remainingBudget: Number(budget),
+            groupId: createdEvent.groupId,
+            eventId: createdEvent.eventId,
+            isAdmin,
           });
         }}
       />
