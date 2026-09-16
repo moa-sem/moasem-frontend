@@ -20,7 +20,13 @@ import CloseEventModal from '../../components/CloseEventModal';
 import UsageRegistrationModal from '../../components/UsageRegistrationModal';
 import EditEventModal from '../../components/EditEventModal';
 import UsageDetailModal from '../../components/UsageDetailModal';
-import { getEvent, type EventDetailResponse } from '../../api/event';
+import BudgetAdditionModal from '../../components/BudgetAdditionModal';
+import {
+  addBudgetAddition,
+  getEvent,
+  type CreateBudgetAdditionRequest,
+  type EventDetailResponse,
+} from '../../api/event';
 import type { ApiError, EventStatus } from '../../types/common';
 
 type Tab = '사용내역' | '보류' | '반려';
@@ -57,26 +63,30 @@ const STATUS_LABEL: Record<EventStatus, string> = {
 
 const formatWon = (amount: number) => `${amount.toLocaleString('ko-KR')}원`;
 
-const normalizeApiError = (error: unknown): ApiError => {
+const normalizeApiError = (
+  error: unknown,
+  fallbackMessage = '행사 정보를 불러오지 못했습니다.',
+): ApiError => {
   if (typeof error === 'object' && error !== null && 'code' in error && 'message' in error) {
     return error as ApiError;
   }
 
   return {
     code: 'UNKNOWN_ERROR',
-    message: '행사 정보를 불러오지 못했습니다.',
+    message: fallbackMessage,
   };
 };
 
 export default function EventDetail() {
   const navigation = useNavigation<NavProp>();
   const { params } = useRoute<RoutePropType>();
-  const { isAdmin } = params;
+  const { groupId, eventId, isAdmin } = params;
   const insets = useSafeAreaInsets();
 
   const [event, setEvent] = useState<EventDetailResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(params.mode === 'api');
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<ApiError | null>(null);
+  const [refreshError, setRefreshError] = useState<ApiError | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [tab, setTab] = useState<Tab>('사용내역');
   const [menuVisible, setMenuVisible] = useState(false);
@@ -84,30 +94,31 @@ export default function EventDetail() {
   const [deleteBlockedVisible, setDeleteBlockedVisible] = useState(false);
   const [closeEventVisible, setCloseEventVisible] = useState(false);
   const [usageModalVisible, setUsageModalVisible] = useState(false);
+  const [budgetAdditionVisible, setBudgetAdditionVisible] = useState(false);
   const [editEventVisible, setEditEventVisible] = useState(false);
   const [editedEventName, setEditedEventName] = useState<string | null>(null);
   const [selectedItem, setSelectedItem] = useState<UsageItem | null>(null);
-  const [lists, setLists] = useState<Record<Tab, UsageItem[]>>(
-    params.mode === 'draft'
-      ? { '사용내역': [], '보류': [], '반려': [] }
-      : { '사용내역': MOCK_사용내역, '보류': MOCK_보류, '반려': MOCK_반려 }
-  );
+  const [lists, setLists] = useState<Record<Tab, UsageItem[]>>({
+    '사용내역': MOCK_사용내역,
+    '보류': MOCK_보류,
+    '반려': MOCK_반려,
+  });
   const requestIdRef = useRef(0);
-
-  const groupId = params.mode === 'api' ? params.groupId : null;
-  const eventId = params.mode === 'api' ? params.eventId : null;
+  const isMountedRef = useRef(true);
 
   useEffect(() => {
-    if (groupId === null || eventId === null) {
-      setIsLoading(false);
-      setError(null);
-      return;
-    }
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
+  useEffect(() => {
     const requestId = ++requestIdRef.current;
 
     setIsLoading(true);
     setError(null);
+    setRefreshError(null);
 
     getEvent(groupId, eventId)
       .then((response) => {
@@ -130,13 +141,10 @@ export default function EventDetail() {
 
   const eventName = editedEventName
     ?? event?.title
-    ?? (params.mode === 'draft' ? params.eventName : '행사 상세');
-  const totalBudget = event?.totalBudget
-    ?? (params.mode === 'draft' ? params.totalBudget : 0);
-  const remainingBudget = event?.remainingBudget
-    ?? (params.mode === 'draft' ? params.remainingBudget : 0);
-  const eventStatus: EventStatus | null = event?.status
-    ?? (params.mode === 'draft' ? 'ACTIVE' : null);
+    ?? '행사 상세';
+  const totalBudget = event?.totalBudget ?? 0;
+  const remainingBudget = event?.remainingBudget ?? 0;
+  const eventStatus: EventStatus | null = event?.status ?? null;
 
   const items = lists[tab];
 
@@ -158,6 +166,29 @@ export default function EventDetail() {
       '반려': [item, ...prev['반려']],
     }));
     setTab('반려');
+  };
+
+  const handleBudgetAddition = async (request: CreateBudgetAdditionRequest) => {
+    await addBudgetAddition(groupId, eventId, request);
+    if (!isMountedRef.current) return;
+
+    setBudgetAdditionVisible(false);
+    setRefreshError(null);
+
+    const requestId = ++requestIdRef.current;
+    try {
+      const refreshedEvent = await getEvent(groupId, eventId);
+      if (isMountedRef.current && requestId === requestIdRef.current) {
+        setEvent(refreshedEvent);
+      }
+    } catch (requestError: unknown) {
+      if (isMountedRef.current && requestId === requestIdRef.current) {
+        setRefreshError(normalizeApiError(
+          requestError,
+          '추가 예산은 등록되었지만 최신 예산 정보를 불러오지 못했습니다.',
+        ));
+      }
+    }
   };
 
   return (
@@ -211,6 +242,16 @@ export default function EventDetail() {
                   <Text style={[styles.statusText, eventStatus === 'ACTIVE' ? styles.statusTextActive : styles.statusTextClosed]}>
                     {STATUS_LABEL[eventStatus]}
                   </Text>
+                </View>
+              </View>
+            )}
+
+            {refreshError && (
+              <View style={styles.refreshErrorCard}>
+                <Feather name="alert-circle" size={16} color="#c85c5c" />
+                <View style={styles.refreshErrorContent}>
+                  <Text style={styles.refreshErrorTitle}>예산 정보 갱신 실패</Text>
+                  <Text style={styles.refreshErrorText}>{refreshError.message}</Text>
                 </View>
               </View>
             )}
@@ -281,6 +322,20 @@ export default function EventDetail() {
           <View style={styles.menuOverlay}>
             <TouchableWithoutFeedback>
               <View style={[styles.menuCard, { top: insets.top + 48 }]}>
+                {eventStatus === 'ACTIVE' && (
+                  <>
+                    <TouchableOpacity
+                      style={styles.menuItem}
+                      onPress={() => {
+                        setMenuVisible(false);
+                        setBudgetAdditionVisible(true);
+                      }}
+                    >
+                      <Text style={styles.menuItemText}>추가 예산 등록</Text>
+                    </TouchableOpacity>
+                    <View style={styles.menuDivider} />
+                  </>
+                )}
                 <TouchableOpacity style={styles.menuItem} onPress={() => setMenuVisible(false)}>
                   <Text style={styles.menuItemText}>PDF 추출</Text>
                 </TouchableOpacity>
@@ -328,6 +383,12 @@ export default function EventDetail() {
           </View>
         </TouchableWithoutFeedback>
       </Modal>
+
+      <BudgetAdditionModal
+        visible={budgetAdditionVisible}
+        onClose={() => setBudgetAdditionVisible(false)}
+        onSubmit={handleBudgetAddition}
+      />
 
       <UsageDetailModal
         visible={!!selectedItem}
@@ -502,6 +563,30 @@ const styles = StyleSheet.create({
   },
   statusTextClosed: {
     color: '#8a8a86',
+  },
+  refreshErrorCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 22,
+    marginTop: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: '#fde8e7',
+  },
+  refreshErrorContent: {
+    flex: 1,
+    gap: 3,
+  },
+  refreshErrorTitle: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    color: '#c85c5c',
+  },
+  refreshErrorText: {
+    fontSize: 12,
+    color: '#c85c5c',
   },
 
   // Tabs
