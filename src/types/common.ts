@@ -24,6 +24,10 @@ export const SPENDING_TAG_LABEL: Record<SpendingTag, string> = {
   OTHER: '#기타',
 };
 
+export type ReportStatus = 'PENDING' | 'GENERATING' | 'COMPLETED' | 'FAILED';
+
+export type AiAnalysisStatus = 'PENDING' | 'SUCCEEDED' | 'FAILED';
+
 // 공통 API 응답 포맷 - 백엔드 global/response/ApiResponse.kt 와 1:1로 맞춘다.
 // 값이 없는 필드는 응답에서 생략되므로 선택 필드로 둔다.
 export interface ApiResponse<T> {
