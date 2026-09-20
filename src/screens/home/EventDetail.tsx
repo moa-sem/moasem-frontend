@@ -33,6 +33,7 @@ import {
   type EventDetailResponse,
 } from '../../api/event';
 import type { ApiError, EventStatus } from '../../types/common';
+import { useReportDownload, type ReportFileKind } from '../../hooks/useReportDownload';
 
 type Tab = '사용내역' | '보류' | '반려';
 
@@ -95,6 +96,8 @@ export default function EventDetail() {
   const [reloadKey, setReloadKey] = useState(0);
   const [tab, setTab] = useState<Tab>('사용내역');
   const [menuVisible, setMenuVisible] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const { download, downloading } = useReportDownload({ onError: setDownloadError });
   const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
   const [deleteError, setDeleteError] = useState<ApiError | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -165,6 +168,15 @@ export default function EventDetail() {
   const remainingBudget = event?.remainingBudget ?? 0;
   const eventStatus: EventStatus | null = event?.status ?? null;
   const isActionableActive = eventStatus === 'ACTIVE' && !closeSucceeded;
+
+  // 마감 전에는 보고서 자체가 없다. 눌러도 실패할 동작을 열어 두지 않는다.
+  const canDownloadReport = eventStatus === 'CLOSED';
+
+  const handleDownload = (kind: ReportFileKind) => {
+    setMenuVisible(false);
+    setDownloadError(null);
+    void download(kind, eventId);
+  };
 
   const items = lists[tab];
 
@@ -395,6 +407,16 @@ export default function EventDetail() {
               </View>
             )}
 
+            {downloadError && (
+              <View style={styles.refreshErrorCard}>
+                <Feather name="alert-circle" size={16} color="#c85c5c" />
+                <View style={styles.refreshErrorContent}>
+                  <Text style={styles.refreshErrorTitle}>결산 보고서 내려받기 실패</Text>
+                  <Text style={styles.refreshErrorText}>{downloadError}</Text>
+                </View>
+              </View>
+            )}
+
             {refreshWarning && (
               <View style={styles.refreshErrorCard}>
                 <Feather name="alert-circle" size={16} color="#c85c5c" />
@@ -485,12 +507,24 @@ export default function EventDetail() {
                     <View style={styles.menuDivider} />
                   </>
                 )}
-                <TouchableOpacity style={styles.menuItem} onPress={() => setMenuVisible(false)}>
-                  <Text style={styles.menuItemText}>PDF 추출</Text>
+                <TouchableOpacity
+                  style={styles.menuItem}
+                  onPress={() => handleDownload('pdf')}
+                  disabled={!canDownloadReport || downloading !== null}
+                >
+                  <Text style={[styles.menuItemText, !canDownloadReport ? styles.menuItemTextDisabled : null]}>
+                    PDF 추출
+                  </Text>
                 </TouchableOpacity>
                 <View style={styles.menuDivider} />
-                <TouchableOpacity style={styles.menuItem} onPress={() => setMenuVisible(false)}>
-                  <Text style={styles.menuItemText}>CSV 추출</Text>
+                <TouchableOpacity
+                  style={styles.menuItem}
+                  onPress={() => handleDownload('csv')}
+                  disabled={!canDownloadReport || downloading !== null}
+                >
+                  <Text style={[styles.menuItemText, !canDownloadReport ? styles.menuItemTextDisabled : null]}>
+                    CSV 추출
+                  </Text>
                 </TouchableOpacity>
                 <View style={styles.menuDivider} />
                 <TouchableOpacity
@@ -902,6 +936,9 @@ const styles = StyleSheet.create({
   },
   menuItemDanger: {
     color: '#e2574c',
+  },
+  menuItemTextDisabled: {
+    color: '#c4c4bf',
   },
   menuDivider: {
     height: 1,
