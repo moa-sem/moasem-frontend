@@ -20,6 +20,7 @@ import CloseEventModal from '../../components/CloseEventModal';
 import UsageRegistrationModal from '../../components/UsageRegistrationModal';
 import EditEventModal from '../../components/EditEventModal';
 import UsageDetailModal from '../../components/UsageDetailModal';
+import ReportSummaryCard from '../../components/ReportSummaryCard';
 import BudgetAdditionModal from '../../components/BudgetAdditionModal';
 import {
   addBudgetAddition,
@@ -365,8 +366,14 @@ export default function EventDetail() {
                 <Text style={styles.budgetAmount}>{formatWon(totalBudget)}</Text>
               </View>
               <View style={styles.budgetCard}>
-                <Text style={styles.budgetLabel}>남은 금액</Text>
-                <Text style={styles.budgetAmount}>{formatWon(remainingBudget)}</Text>
+                {/* 예산을 넘기면 값이 음수로 내려온다. 그때도 "남은 금액"이라고 부르면
+                    초과 사실이 드러나지 않는다. 결산 카드와 같은 기준으로 표시한다. */}
+                <Text style={styles.budgetLabel}>
+                  {remainingBudget < 0 ? '초과 금액' : '남은 금액'}
+                </Text>
+                <Text style={[styles.budgetAmount, remainingBudget < 0 ? styles.budgetAmountOver : null]}>
+                  {formatWon(remainingBudget)}
+                </Text>
               </View>
             </View>
 
@@ -378,6 +385,13 @@ export default function EventDetail() {
                     {STATUS_LABEL[eventStatus]}
                   </Text>
                 </View>
+              </View>
+            )}
+
+            {/* 마감된 행사에만 결산이 존재한다. 생성 상태는 카드가 스스로 확인한다. */}
+            {eventStatus === 'CLOSED' && (
+              <View style={styles.reportSection}>
+                <ReportSummaryCard eventId={eventId} />
               </View>
             )}
 
@@ -613,6 +627,9 @@ const styles = StyleSheet.create({
   },
 
   // Budget cards
+  reportSection: {
+    marginTop: 4,
+  },
   budgetRow: {
     flexDirection: 'row',
     marginHorizontal: 22,
@@ -629,6 +646,9 @@ const styles = StyleSheet.create({
   budgetLabel: {
     fontSize: 12,
     color: '#8a8a86',
+  },
+  budgetAmountOver: {
+    color: '#c85c5c',
   },
   budgetAmount: {
     fontSize: 18,
