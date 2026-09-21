@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import {
   Image,
   KeyboardAvoidingView,
@@ -13,13 +13,21 @@ import {
   View,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { File } from 'expo-file-system';
+import type { EvidenceFile } from '../api/spending/uploadEvidenceFile';
+import type { NewSpending } from '../hooks/useSpendings';
+import { SPENDING_TAGS, SPENDING_TAG_LABEL, type SpendingTag } from '../types/common';
 
-const TAGS = ['식비', '숙박비', '교통비', '대관비', '물품비', '기타'];
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
-const PERIODS = ['오전', '오후'];
-const HOURS = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'));
-const MINUTES = Array.from({ length: 12 }, (_, i) => String(i * 5).padStart(2, '0'));
-const DRUM_H = 44;
+
+/** 서버가 허용하는 증빙 형식. 올린 뒤 거부당하지 않도록 고르는 단계에서 먼저 막는다. */
+const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png'];
+
+const mimeTypeOf = (asset: ImagePicker.ImagePickerAsset) => {
+  if (asset.mimeType) return asset.mimeType;
+  // 안드로이드 갤러리는 mimeType을 비워 보낼 때가 있다. 확장자로 채운다.
+  return /\.png$/i.test(asset.uri) ? 'image/png' : 'image/jpeg';
+};
 
 function getCalendarDays(year: number, month: number): (number | null)[] {
   const firstDay = new Date(year, month, 1).getDay();
@@ -29,67 +37,22 @@ function getCalendarDays(year: number, month: number): (number | null)[] {
   return days;
 }
 
-function DrumColumn({ items, value, onChange }: {
-  items: string[];
-  value: number;
-  onChange: (i: number) => void;
-}) {
-  const ref = useRef<ScrollView>(null);
-
-  useEffect(() => {
-    setTimeout(() => {
-      ref.current?.scrollTo({ y: value * DRUM_H, animated: false });
-    }, 80);
-  }, []);
-
-  return (
-    <View style={{ flex: 1, height: DRUM_H * 3, overflow: 'hidden' }}>
-      <View
-        pointerEvents="none"
-        style={{
-          position: 'absolute',
-          top: DRUM_H, left: 0, right: 0,
-          height: DRUM_H,
-          borderTopWidth: 1, borderBottomWidth: 1,
-          borderColor: '#e2e5ea',
-          zIndex: 1,
-        }}
-      />
-      <ScrollView
-        ref={ref}
-        showsVerticalScrollIndicator={false}
-        snapToInterval={DRUM_H}
-        decelerationRate="fast"
-        contentContainerStyle={{ paddingVertical: DRUM_H }}
-        onMomentumScrollEnd={(e) => {
-          const idx = Math.max(0, Math.min(items.length - 1, Math.round(e.nativeEvent.contentOffset.y / DRUM_H)));
-          onChange(idx);
-        }}
-      >
-        {items.map((item, i) => (
-          <View key={item} style={{ height: DRUM_H, justifyContent: 'center', alignItems: 'center' }}>
-            <Text style={{ fontSize: 15, fontWeight: i === value ? '700' : '400', color: i === value ? '#2b2b28' : '#c4c4c0' }}>
-              {item}
-            </Text>
-          </View>
-        ))}
-      </ScrollView>
-    </View>
-  );
-}
-
-function DateTimeSheet({ visible, onClose, onConfirm }: {
+/**
+ * 지출일 선택.
+ *
+ * 시각은 고르지 않는다. 서버가 지출일을 날짜까지만 보관하기 때문이다.
+ * 시간을 입력받으면 사용자가 고른 값이 저장되지 않은 채 사라진다.
+ */
+function DateSheet({ visible, onClose, onConfirm }: {
   visible: boolean;
   onClose: () => void;
-  onConfirm: (label: string) => void;
+  /** yyyy-MM-dd */
+  onConfirm: (spentOn: string) => void;
 }) {
   const today = new Date();
   const [year, setYear] = useState(today.getFullYear());
   const [month, setMonth] = useState(today.getMonth());
   const [day, setDay] = useState(today.getDate());
-  const [periodIdx, setPeriodIdx] = useState(0);
-  const [hourIdx, setHourIdx] = useState(0);
-  const [minIdx, setMinIdx] = useState(0);
 
   const flatDays = getCalendarDays(year, month);
   // 7개씩 row로 분리
@@ -110,8 +73,7 @@ function DateTimeSheet({ visible, onClose, onConfirm }: {
   };
 
   const handleConfirm = () => {
-    const label = `${year}.${String(month + 1).padStart(2, '0')}.${String(day).padStart(2, '0')} ${PERIODS[periodIdx]} ${HOURS[hourIdx]}:${MINUTES[minIdx]}`;
-    onConfirm(label);
+    onConfirm(`${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
   };
 
   if (!visible) return null;
@@ -125,7 +87,7 @@ function DateTimeSheet({ visible, onClose, onConfirm }: {
       {/* 시트는 일반 View — ScrollView 제스처 간섭 없음 */}
       <View style={dt.sheet}>
             <View style={dt.handle} />
-            <Text style={dt.title}>날짜/시간 선택</Text>
+            <Text style={dt.title}>날짜 선택</Text>
 
             <View style={dt.monthRow}>
               <TouchableOpacity onPress={prevMonth} style={dt.navBtn}>
@@ -165,12 +127,6 @@ function DateTimeSheet({ visible, onClose, onConfirm }: {
               ))}
             </View>
 
-            <View style={dt.drumRow}>
-              <DrumColumn items={PERIODS} value={periodIdx} onChange={setPeriodIdx} />
-              <DrumColumn items={HOURS} value={hourIdx} onChange={setHourIdx} />
-              <DrumColumn items={MINUTES} value={minIdx} onChange={setMinIdx} />
-            </View>
-
             <TouchableOpacity style={dt.confirmBtn} onPress={handleConfirm} activeOpacity={0.85}>
               <Text style={dt.confirmBtnText}>확인</Text>
             </TouchableOpacity>
@@ -182,17 +138,42 @@ function DateTimeSheet({ visible, onClose, onConfirm }: {
 type Props = {
   visible: boolean;
   onClose: () => void;
-  onSubmit: (data: { amount: string; description: string; date: string; tag: string }) => Promise<void>;
+  onSubmit: (data: NewSpending) => Promise<void>;
 };
 
 export default function UsageRegistrationModal({ visible, onClose, onSubmit }: Props) {
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
-  const [date, setDate] = useState('');
-  const [tag, setTag] = useState('식비');
-  const [receiptUri, setReceiptUri] = useState<string | null>(null);
+  const [spentOn, setSpentOn] = useState('');
+  const [tag, setTag] = useState<SpendingTag>('MEAL');
+  const [otherDetail, setOtherDetail] = useState('');
+  const [receipt, setReceipt] = useState<EvidenceFile | null>(null);
   const [receiptDropdownVisible, setReceiptDropdownVisible] = useState(false);
   const [dateVisible, setDateVisible] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  /**
+   * 고른 이미지를 업로드에 필요한 형태로 바꾼다.
+   *
+   * 사진 선택기가 용량을 비워 줄 때가 있어 파일에서 직접 읽는다. 서버가 0 이하를 거부하므로
+   * 여기서 못 채우면 올리기 전에 막는다.
+   */
+  const toEvidence = (asset: ImagePicker.ImagePickerAsset): EvidenceFile | null => {
+    const mimeType = mimeTypeOf(asset);
+    if (!ALLOWED_MIME_TYPES.includes(mimeType)) {
+      setError('영수증은 JPG 또는 PNG 이미지만 올릴 수 있습니다.');
+      return null;
+    }
+
+    const fileSize = asset.fileSize ?? new File(asset.uri).size ?? 0;
+    if (fileSize <= 0) {
+      setError('이미지 정보를 읽지 못했습니다. 다른 사진으로 다시 시도해주세요.');
+      return null;
+    }
+
+    return { uri: asset.uri, mimeType, fileSize };
+  };
 
   const pickFromGallery = async () => {
     setReceiptDropdownVisible(false);
@@ -202,7 +183,11 @@ export default function UsageRegistrationModal({ visible, onClose, onSubmit }: P
       mediaTypes: ['images'],
       quality: 0.8,
     });
-    if (!result.canceled) setReceiptUri(result.assets[0].uri);
+    if (result.canceled) return;
+
+    setError(null);
+    const evidence = toEvidence(result.assets[0]);
+    if (evidence) setReceipt(evidence);
   };
 
   const pickFromCamera = async () => {
@@ -210,10 +195,21 @@ export default function UsageRegistrationModal({ visible, onClose, onSubmit }: P
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') return;
     const result = await ImagePicker.launchCameraAsync({ quality: 0.8 });
-    if (!result.canceled) setReceiptUri(result.assets[0].uri);
+    if (result.canceled) return;
+
+    setError(null);
+    const evidence = toEvidence(result.assets[0]);
+    if (evidence) setReceipt(evidence);
   };
 
-  const canSubmit = amount.trim() && description.trim() && date;
+  // 증빙은 선택이 아니라 필수다. 기타 태그는 무엇에 썼는지가 사유만으로는 남지 않아 상세를 함께 받는다.
+  const canSubmit = Boolean(
+    amount.trim()
+    && description.trim()
+    && spentOn
+    && receipt
+    && (tag !== 'OTHER' || otherDetail.trim()),
+  );
 
   const handleAmountChange = (text: string) => {
     const digits = text.replace(/[^0-9]/g, '');
@@ -221,25 +217,48 @@ export default function UsageRegistrationModal({ visible, onClose, onSubmit }: P
   };
 
   const handleClose = () => {
+    if (isSubmitting) return;
+
     setAmount('');
     setDescription('');
-    setDate('');
-    setTag('식비');
-    setReceiptUri(null);
+    setSpentOn('');
+    setTag('MEAL');
+    setOtherDetail('');
+    setReceipt(null);
     setReceiptDropdownVisible(false);
     setDateVisible(false);
+    setError(null);
     onClose();
   };
 
   const handleSubmit = async () => {
-    if (!canSubmit) return;
-    await onSubmit({ amount: amount.replace(/,/g, ''), description, date, tag });
-    handleClose();
+    // 두 번 누르면 증빙이 두 번 올라가고 지출도 두 건이 된다.
+    if (!canSubmit || isSubmitting || !receipt) return;
+
+    setIsSubmitting(true);
+    setError(null);
+
+    try {
+      await onSubmit({
+        amount: Number(amount.replace(/,/g, '')),
+        reason: description.trim(),
+        spentOn,
+        tag,
+        otherDetail: tag === 'OTHER' ? otherDetail.trim() : null,
+        evidence: receipt,
+      });
+      setIsSubmitting(false);
+      handleClose();
+    } catch (submitError: unknown) {
+      const apiError = submitError as { message?: string } | undefined;
+      setError(apiError?.message ?? '지출을 신청하지 못했습니다.');
+      setIsSubmitting(false);
+    }
   };
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={handleClose}>
-      {/* 루트 View: KeyboardAvoidingView + DateTimeSheet 겹침 */}
+      {/* 루트 View: KeyboardAvoidingView + DateSheet 겹침 */}
       <View style={{ flex: 1 }}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
           <TouchableWithoutFeedback onPress={handleClose}>
@@ -255,9 +274,9 @@ export default function UsageRegistrationModal({ visible, onClose, onSubmit }: P
 
                   {/* 영수증 첨부 */}
                   <View style={styles.receiptWrapper}>
-                    {receiptUri ? (
+                    {receipt ? (
                       <TouchableOpacity onPress={() => setReceiptDropdownVisible(v => !v)} activeOpacity={0.8}>
-                        <Image source={{ uri: receiptUri }} style={styles.receiptPreview} resizeMode="cover" />
+                        <Image source={{ uri: receipt.uri }} style={styles.receiptPreview} resizeMode="cover" />
                       </TouchableOpacity>
                     ) : (
                       <TouchableOpacity
@@ -265,7 +284,7 @@ export default function UsageRegistrationModal({ visible, onClose, onSubmit }: P
                         onPress={() => setReceiptDropdownVisible(v => !v)}
                         activeOpacity={0.7}
                       >
-                        <Text style={styles.receiptBtnText}>영수증 첨부</Text>
+                        <Text style={styles.receiptBtnText}>영수증 첨부 (필수)</Text>
                       </TouchableOpacity>
                     )}
                     {receiptDropdownVisible && (
@@ -325,8 +344,8 @@ export default function UsageRegistrationModal({ visible, onClose, onSubmit }: P
                       onPress={() => setDateVisible(true)}
                       activeOpacity={0.7}
                     >
-                      <Text style={date ? styles.dateText : styles.datePlaceholder}>
-                        {date || '날짜/시간 선택'}
+                      <Text style={spentOn ? styles.dateText : styles.datePlaceholder}>
+                        {spentOn ? spentOn.replace(/-/g, '.') : '날짜 선택'}
                       </Text>
                     </TouchableOpacity>
                   </View>
@@ -335,26 +354,46 @@ export default function UsageRegistrationModal({ visible, onClose, onSubmit }: P
                   <View style={styles.field}>
                     <Text style={styles.label}>태그</Text>
                     <View style={styles.tagRow}>
-                      {TAGS.map(t => (
+                      {SPENDING_TAGS.map(t => (
                         <TouchableOpacity
                           key={t}
                           style={[styles.tag, tag === t && styles.tagActive]}
                           onPress={() => setTag(t)}
                           activeOpacity={0.7}
                         >
-                          <Text style={[styles.tagText, tag === t && styles.tagTextActive]}>{t}</Text>
+                          <Text style={[styles.tagText, tag === t && styles.tagTextActive]}>
+                            {SPENDING_TAG_LABEL[t]}
+                          </Text>
                         </TouchableOpacity>
                       ))}
                     </View>
                   </View>
 
+                  {/* 기타는 라벨만으로 무엇에 썼는지 남지 않는다. 결산 보고서에도 이 값이 함께 찍힌다. */}
+                  {tag === 'OTHER' && (
+                    <View style={styles.field}>
+                      <Text style={styles.label}>기타 상세</Text>
+                      <TextInput
+                        style={styles.input}
+                        placeholder="어떤 지출인지 적어주세요"
+                        placeholderTextColor="#a3a29c"
+                        value={otherDetail}
+                        onChangeText={setOtherDetail}
+                      />
+                    </View>
+                  )}
+
+                  {error && <Text style={styles.errorText}>{error}</Text>}
+
                   <TouchableOpacity
-                    style={[styles.submitBtn, !canSubmit && styles.submitBtnDisabled]}
+                    style={[styles.submitBtn, (!canSubmit || isSubmitting) && styles.submitBtnDisabled]}
                     onPress={handleSubmit}
                     activeOpacity={0.85}
-                    disabled={!canSubmit}
+                    disabled={!canSubmit || isSubmitting}
                   >
-                    <Text style={styles.submitBtnText}>제출하기</Text>
+                    <Text style={styles.submitBtnText}>
+                      {isSubmitting ? '제출 중...' : '제출하기'}
+                    </Text>
                   </TouchableOpacity>
                   </ScrollView>
                 </View>
@@ -363,11 +402,11 @@ export default function UsageRegistrationModal({ visible, onClose, onSubmit }: P
           </TouchableWithoutFeedback>
         </KeyboardAvoidingView>
 
-        {/* DateTimeSheet: KeyboardAvoidingView 바깥에서 absolute로 덮음 */}
-        <DateTimeSheet
+        {/* DateSheet: KeyboardAvoidingView 바깥에서 absolute로 덮음 */}
+        <DateSheet
           visible={dateVisible}
           onClose={() => setDateVisible(false)}
-          onConfirm={(label) => { setDate(label); setDateVisible(false); }}
+          onConfirm={(value) => { setSpentOn(value); setDateVisible(false); }}
         />
       </View>
     </Modal>
@@ -375,6 +414,11 @@ export default function UsageRegistrationModal({ visible, onClose, onSubmit }: P
 }
 
 const styles = StyleSheet.create({
+  errorText: {
+    fontSize: 12.5,
+    color: '#c85c5c',
+    marginBottom: 12,
+  },
   overlay: {
     flex: 1,
     justifyContent: 'center',
