@@ -22,6 +22,7 @@ import EditEventModal from '../../components/EditEventModal';
 import UsageDetailModal from '../../components/UsageDetailModal';
 import ReportSummaryCard from '../../components/ReportSummaryCard';
 import BudgetAdditionModal from '../../components/BudgetAdditionModal';
+import RejectSpendingModal from '../../components/RejectSpendingModal';
 import {
   addBudgetAddition,
   closeEvent,
@@ -32,32 +33,19 @@ import {
   type EventClosePreviewResponse,
   type EventDetailResponse,
 } from '../../api/event';
-import type { ApiError, EventStatus } from '../../types/common';
+import type { ApiError, EventStatus, SpendingStatus } from '../../types/common';
+import type { SpendingListResponse } from '../../api/spending';
+import { approve, reject, submitSpending, useSpendings, type NewSpending } from '../../hooks/useSpendings';
 import { useReportDownload, type ReportFileKind } from '../../hooks/useReportDownload';
 
 type Tab = '사용내역' | '보류' | '반려';
 
-type UsageItem = {
-  id: string;
-  name: string;
-  amount: string;
-  category: string;
-  date: string;
-  description?: string;
+/** 탭이 곧 지출 상태다. 승인된 건만 예산에 반영되므로 기본 탭은 사용내역이다. */
+const TAB_STATUS: Record<Tab, SpendingStatus> = {
+  '사용내역': 'APPROVED',
+  '보류': 'PENDING',
+  '반려': 'REJECTED',
 };
-
-const MOCK_사용내역: UsageItem[] = [
-  { id: '1', name: '김민준', amount: '150,000원', category: '숙박비', date: '2026.07.12 21:30', description: '첫째날 숙박비' },
-  { id: '2', name: '홍길동', amount: '20,000원', category: '식비', date: '2026.07.12 19:04', description: '저녁 식사' },
-];
-
-const MOCK_보류: UsageItem[] = [
-  { id: '3', name: '이서연', amount: '35,000원', category: '교통비', date: '2026.07.13 09:15', description: '렌터카 이동' },
-];
-
-const MOCK_반려: UsageItem[] = [
-  { id: '4', name: '박지훈', amount: '12,000원', category: '기타', date: '2026.07.13 11:42', description: '기타 지출' },
-];
 
 type NavProp = NativeStackNavigationProp<RootStackParamList, 'EventDetail'>;
 type RoutePropType = RouteProp<RootStackParamList, 'EventDetail'>;
@@ -68,6 +56,12 @@ const STATUS_LABEL: Record<EventStatus, string> = {
 };
 
 const formatWon = (amount: number) => `${amount.toLocaleString('ko-KR')}원`;
+
+const EMPTY_TEXT: Record<Tab, string> = {
+  '사용내역': '승인된 지출이 아직 없습니다.',
+  '보류': '처리할 지출 신청이 없습니다.',
+  '반려': '반려된 지출이 없습니다.',
+};
 
 const normalizeApiError = (
   error: unknown,
@@ -111,12 +105,20 @@ export default function EventDetail() {
   const [budgetAdditionVisible, setBudgetAdditionVisible] = useState(false);
   const [editEventVisible, setEditEventVisible] = useState(false);
   const [editedEventName, setEditedEventName] = useState<string | null>(null);
-  const [selectedItem, setSelectedItem] = useState<UsageItem | null>(null);
-  const [lists, setLists] = useState<Record<Tab, UsageItem[]>>({
-    '사용내역': MOCK_사용내역,
-    '보류': MOCK_보류,
-    '반려': MOCK_반려,
-  });
+  const [selectedItem, setSelectedItem] = useState<SpendingListResponse | null>(null);
+  const [rejectTarget, setRejectTarget] = useState<SpendingListResponse | null>(null);
+  const [processingId, setProcessingId] = useState<number | null>(null);
+  const [spendingError, setSpendingError] = useState<string | null>(null);
+
+  const {
+    items,
+    isLoading: isSpendingsLoading,
+    error: spendingsError,
+    hasMore,
+    isLoadingMore,
+    reload: reloadSpendings,
+    loadMore,
+  } = useSpendings(eventId, TAB_STATUS[tab]);
   const detailRequestIdRef = useRef(0);
   const previewRequestIdRef = useRef(0);
   const isDeletingRef = useRef(false);
@@ -178,26 +180,64 @@ export default function EventDetail() {
     void download(kind, eventId);
   };
 
-  const items = lists[tab];
+  /**
+   * 승인·반려 후에는 행사 예산도 다시 읽는다.
+   *
+   * 승인된 지출만 예산에 반영되므로, 목록만 갱신하면 상단 잔여 예산이 옛 값으로 남는다.
+   */
+  const refreshAfterProcessing = async () => {
+    await reloadSpendings();
 
-  const handleApprove = async (item: UsageItem) => {
-    // TODO: 백엔드 승인 API 호출
-    setLists(prev => ({
-      ...prev,
-      '보류': prev['보류'].filter(i => i.id !== item.id),
-      '사용내역': [item, ...prev['사용내역']],
-    }));
-    setTab('사용내역');
+    const requestId = ++detailRequestIdRef.current;
+    try {
+      const refreshedEvent = await getEvent(groupId, eventId);
+      if (isMountedRef.current && requestId === detailRequestIdRef.current) {
+        setEvent(refreshedEvent);
+      }
+    } catch {
+      // 예산 갱신 실패는 처리 결과를 되돌리지 않는다. 다음 조회에서 맞춰진다.
+    }
   };
 
-  const handleReject = async (item: UsageItem) => {
-    // TODO: 백엔드 반려 API 호출
-    setLists(prev => ({
-      ...prev,
-      '보류': prev['보류'].filter(i => i.id !== item.id),
-      '반려': [item, ...prev['반려']],
-    }));
-    setTab('반려');
+  const handleApprove = async (item: SpendingListResponse) => {
+    // 같은 건을 두 번 누르면 뒤엣것은 서버에서 막히지만, 그 전에 버튼을 잠근다.
+    if (processingId !== null) return;
+
+    setProcessingId(item.spendingId);
+    setSpendingError(null);
+
+    try {
+      await approve(eventId, item.spendingId);
+      if (!isMountedRef.current) return;
+      await refreshAfterProcessing();
+    } catch (requestError: unknown) {
+      if (isMountedRef.current) {
+        setSpendingError(normalizeApiError(requestError, '지출을 승인하지 못했습니다.').message);
+      }
+    } finally {
+      if (isMountedRef.current) setProcessingId(null);
+    }
+  };
+
+  const handleReject = async (reason: string) => {
+    if (!rejectTarget) return;
+
+    await reject(eventId, rejectTarget.spendingId, reason);
+    if (!isMountedRef.current) return;
+
+    setRejectTarget(null);
+    setSpendingError(null);
+    await refreshAfterProcessing();
+  };
+
+  const handleRegisterSpending = async (spending: NewSpending) => {
+    await submitSpending(eventId, spending);
+    if (!isMountedRef.current) return;
+
+    setUsageModalVisible(false);
+    // 신청은 항상 대기 상태로 시작한다. 방금 낸 건이 보이도록 그 탭으로 옮긴다.
+    setTab('보류');
+    if (TAB_STATUS[tab] === 'PENDING') await reloadSpendings();
   };
 
   const handleBudgetAddition = async (request: CreateBudgetAdditionRequest) => {
@@ -440,34 +480,89 @@ export default function EventDetail() {
               ))}
             </View>
 
+            {spendingError && (
+              <View style={styles.refreshErrorCard}>
+                <Feather name="alert-circle" size={16} color="#c85c5c" />
+                <View style={styles.refreshErrorContent}>
+                  <Text style={styles.refreshErrorTitle}>지출 처리 실패</Text>
+                  <Text style={styles.refreshErrorText}>{spendingError}</Text>
+                </View>
+              </View>
+            )}
+
             {/* List */}
             <View style={styles.list}>
-              {items.map(item => (
-                <TouchableOpacity key={item.id} style={styles.itemCard} activeOpacity={0.7} onPress={() => setSelectedItem(item)}>
-                  <View style={styles.itemTopRow}>
-                    <View style={styles.itemLeft}>
-                      <View style={styles.itemNameRow}>
-                        <Text style={styles.itemName}>{item.name}</Text>
-                        <Text style={styles.itemAmount}>{item.amount}</Text>
-                        <View style={styles.categoryTag}>
-                          <Text style={styles.categoryText}># {item.category}</Text>
+              {isSpendingsLoading ? (
+                <View style={styles.listStateBox}>
+                  <ActivityIndicator color="#403a6b" />
+                </View>
+              ) : spendingsError ? (
+                <View style={styles.listStateBox}>
+                  <Text style={styles.errorText}>{spendingsError.message}</Text>
+                  <TouchableOpacity style={styles.retryButton} onPress={() => void reloadSpendings()}>
+                    <Text style={styles.retryButtonText}>다시 시도</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : items.length === 0 ? (
+                <View style={styles.listStateBox}>
+                  <Text style={styles.emptyText}>{EMPTY_TEXT[tab]}</Text>
+                </View>
+              ) : (
+                <>
+                  {items.map(item => (
+                    <TouchableOpacity
+                      key={item.spendingId}
+                      style={styles.itemCard}
+                      activeOpacity={0.7}
+                      onPress={() => setSelectedItem(item)}
+                    >
+                      <View style={styles.itemTopRow}>
+                        <View style={styles.itemLeft}>
+                          <View style={styles.itemNameRow}>
+                            <Text style={styles.itemName}>{item.applicantName}</Text>
+                            <Text style={styles.itemAmount}>{formatWon(item.amount)}</Text>
+                            <View style={styles.categoryTag}>
+                              <Text style={styles.categoryText}># {item.tagLabel}</Text>
+                            </View>
+                          </View>
+                          <Text style={styles.itemDate}>{item.spentOn.replace(/-/g, '.')}</Text>
                         </View>
+                        {isAdmin && tab === '보류' && isActionableActive && (
+                          <View style={styles.actionButtons}>
+                            <TouchableOpacity
+                              style={[styles.approveBtn, processingId !== null && styles.actionBtnDisabled]}
+                              onPress={() => handleApprove(item)}
+                              disabled={processingId !== null}
+                            >
+                              <Text style={styles.approveBtnText}>승인</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={[styles.rejectBtn, processingId !== null && styles.actionBtnDisabled]}
+                              onPress={() => setRejectTarget(item)}
+                              disabled={processingId !== null}
+                            >
+                              <Text style={styles.rejectBtnText}>반려</Text>
+                            </TouchableOpacity>
+                          </View>
+                        )}
                       </View>
-                      <Text style={styles.itemDate}>{item.date}</Text>
-                    </View>
-                    {isAdmin && tab === '보류' && (
-                      <View style={styles.actionButtons}>
-                        <TouchableOpacity style={styles.approveBtn} onPress={() => handleApprove(item)}>
-                          <Text style={styles.approveBtnText}>승인</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.rejectBtn} onPress={() => handleReject(item)}>
-                          <Text style={styles.rejectBtnText}>반려</Text>
-                        </TouchableOpacity>
-                      </View>
-                    )}
-                  </View>
-                </TouchableOpacity>
-              ))}
+                    </TouchableOpacity>
+                  ))}
+
+                  {/* 한 번에 20건씩 온다. 그 아래 건이 영영 안 보이지 않도록 이어 받는다. */}
+                  {hasMore && (
+                    <TouchableOpacity
+                      style={styles.moreButton}
+                      onPress={() => void loadMore()}
+                      disabled={isLoadingMore}
+                    >
+                      <Text style={styles.moreButtonText}>
+                        {isLoadingMore ? '불러오는 중...' : '더 보기'}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </>
+              )}
             </View>
           </>
         )}
@@ -577,8 +672,17 @@ export default function EventDetail() {
 
       <UsageDetailModal
         visible={!!selectedItem}
-        item={selectedItem}
+        eventId={eventId}
+        spendingId={selectedItem?.spendingId ?? null}
+        applicantName={selectedItem?.applicantName ?? ''}
         onClose={() => setSelectedItem(null)}
+      />
+
+      <RejectSpendingModal
+        visible={!!rejectTarget}
+        applicantName={rejectTarget?.applicantName ?? ''}
+        onClose={() => setRejectTarget(null)}
+        onSubmit={handleReject}
       />
 
       <EditEventModal
@@ -594,9 +698,7 @@ export default function EventDetail() {
       <UsageRegistrationModal
         visible={usageModalVisible}
         onClose={() => setUsageModalVisible(false)}
-        onSubmit={async (_data) => {
-          // TODO: 백엔드 사용 등록 API 호출
-        }}
+        onSubmit={handleRegisterSpending}
       />
 
       <CloseEventModal
@@ -804,6 +906,30 @@ const styles = StyleSheet.create({
   },
 
   // List
+  listStateBox: {
+    paddingVertical: 36,
+    alignItems: 'center',
+    gap: 12,
+  },
+  emptyText: {
+    fontSize: 13,
+    color: '#a3a29c',
+  },
+  actionBtnDisabled: {
+    opacity: 0.5,
+  },
+  moreButton: {
+    marginTop: 4,
+    paddingVertical: 12,
+    alignItems: 'center',
+    borderRadius: 12,
+    backgroundColor: '#f2f3f5',
+  },
+  moreButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#5c5c58',
+  },
   list: {
     marginHorizontal: 22,
     gap: 10,

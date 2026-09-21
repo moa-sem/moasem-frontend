@@ -15,14 +15,34 @@ export type SpendingTag =
   | 'SUPPLIES'
   | 'OTHER';
 
+/**
+ * 표시용 한글 라벨.
+ *
+ * '#'은 붙이지 않는다. 목록·상세의 태그 칩에서만 화면이 직접 붙인다.
+ * 서버도 목록·상세 응답에 `tagLabel`을 함께 내려주므로, 조회 화면에서는 이 표가 아니라
+ * 응답 값을 쓴다. 이 표는 아직 서버에 보내지 않은 값(등록 폼의 태그 선택)에만 필요하다.
+ */
 export const SPENDING_TAG_LABEL: Record<SpendingTag, string> = {
-  MEAL: '#식비',
-  ACCOMMODATION: '#숙박비',
-  TRANSPORTATION: '#교통비',
-  VENUE: '#대관비',
-  SUPPLIES: '#물품비',
-  OTHER: '#기타',
+  MEAL: '식비',
+  ACCOMMODATION: '숙박비',
+  TRANSPORTATION: '교통비',
+  VENUE: '대관비',
+  SUPPLIES: '물품비',
+  OTHER: '기타',
 };
+
+/** 등록 폼의 태그 선택 순서. 기획안에 고정된 6종이며 사용자가 추가할 수 없다. */
+export const SPENDING_TAGS: SpendingTag[] = [
+  'MEAL',
+  'ACCOMMODATION',
+  'TRANSPORTATION',
+  'VENUE',
+  'SUPPLIES',
+  'OTHER',
+];
+
+/** 증빙 종류. 어느 쪽이든 이미지 한 장을 첨부한다. */
+export type EvidenceType = 'RECEIPT' | 'BANK_TRANSFER';
 
 export type ReportStatus = 'PENDING' | 'GENERATING' | 'COMPLETED' | 'FAILED';
 
