@@ -20,7 +20,6 @@ import CloseEventModal from '../../components/CloseEventModal';
 import UsageRegistrationModal from '../../components/UsageRegistrationModal';
 import EditEventModal from '../../components/EditEventModal';
 import UsageDetailModal from '../../components/UsageDetailModal';
-import ReportSummaryCard from '../../components/ReportSummaryCard';
 import BudgetAdditionModal from '../../components/BudgetAdditionModal';
 import RejectSpendingModal from '../../components/RejectSpendingModal';
 import {
@@ -91,7 +90,8 @@ export default function EventDetail() {
   const [tab, setTab] = useState<Tab>('사용내역');
   const [menuVisible, setMenuVisible] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
-  const { download, downloading } = useReportDownload({ onError: setDownloadError });
+  const { download, downloading, retryPrompt, isRetrying, retryError, confirmRetry, cancelRetry } =
+    useReportDownload({ onError: setDownloadError });
   const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
   const [deleteError, setDeleteError] = useState<ApiError | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -440,13 +440,6 @@ export default function EventDetail() {
               </View>
             )}
 
-            {/* 마감된 행사에만 결산이 존재한다. 생성 상태는 카드가 스스로 확인한다. */}
-            {eventStatus === 'CLOSED' && (
-              <View style={styles.reportSection}>
-                <ReportSummaryCard eventId={eventId} />
-              </View>
-            )}
-
             {downloadError && (
               <View style={styles.refreshErrorCard}>
                 <Feather name="alert-circle" size={16} color="#c85c5c" />
@@ -713,6 +706,27 @@ export default function EventDetail() {
         onConfirm={handleCloseEvent}
       />
 
+      {/* 서버에서 파일 생성이 실패했을 때만 뜬다. 내려받기 실패에는 뜨지 않는다. */}
+      <ConfirmModal
+        visible={retryPrompt !== null}
+        title="결산 보고서를 만들지 못했어요"
+        message={
+          retryPrompt?.reason
+            ? `${retryPrompt.reason}
+다시 만들까요? 결산 금액은 그대로 유지돼요.`
+            : '다시 만들까요? 결산 금액은 그대로 유지돼요.'
+        }
+        confirmText="다시 만들기"
+        cancelText="취소"
+        isLoading={isRetrying}
+        errorMessage={retryError ?? undefined}
+        onConfirm={() => void confirmRetry()}
+        onCancel={() => {
+          if (isRetrying) return;
+          cancelRetry();
+        }}
+      />
+
       <ConfirmModal
         visible={deleteConfirmVisible}
         title="정말 삭제하시겠습니까?"
@@ -763,9 +777,6 @@ const styles = StyleSheet.create({
   },
 
   // Budget cards
-  reportSection: {
-    marginTop: 4,
-  },
   budgetRow: {
     flexDirection: 'row',
     marginHorizontal: 22,
