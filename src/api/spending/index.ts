@@ -157,3 +157,23 @@ export const rejectSpending = (
   `/api/v1/events/${eventId}/spendings/${spendingId}/rejection`,
   request,
 );
+
+/** 모든 필드가 nullable이다. 읽지 못했거나 AI 호출이 실패하면 null로 온다. */
+export interface ReceiptOcrResponse {
+  amount: number | null;
+  /** yyyy-MM-dd */
+  spentOn: string | null;
+  merchantName: string | null;
+  tag: SpendingTag | null;
+}
+
+/**
+ * 업로드가 끝난 증빙을 AI로 읽어 신청 폼 기본값을 받는다. 서버에 저장되지 않는다.
+ * 보통 2~5초 걸려 공통 타임아웃(10초)보다 넉넉하게 잡는다.
+ */
+export const recognizeReceipt = (eventId: number, storageKey: string) =>
+  http.post<ReceiptOcrResponse>(
+    `/api/v1/events/${eventId}/spendings/receipt-ocr`,
+    { storageKey },
+    { timeout: 20000 },
+  );

@@ -24,8 +24,19 @@ export type NewSpending = {
   reason: string;
   tag: CreateSpendingRequest['tag'];
   otherDetail: string | null;
-  evidence: EvidenceFile;
+  /** storageKey가 있으면 이미 올라간 파일이라 다시 올리지 않는다. */
+  evidence: EvidenceFile & { storageKey?: string };
 };
+
+/** 증빙을 올리고 저장 키를 돌려준다. */
+export async function uploadEvidence(eventId: number, evidence: EvidenceFile) {
+  const { uploadUrl, storageKey } = await issueEvidenceUploadUrl(eventId, {
+    mimeType: evidence.mimeType,
+    fileSize: evidence.fileSize,
+  });
+  await uploadEvidenceFile(uploadUrl, evidence);
+  return storageKey;
+}
 
 const toApiError = (error: unknown, fallback: string): ApiError => {
   if (typeof error === 'object' && error !== null && 'code' in error && 'message' in error) {
@@ -108,6 +119,7 @@ export function useSpendings(eventId: number, status: SpendingStatus) {
 
 /**
  * 지출 신청. 증빙을 먼저 올리고 그 저장 키로 신청한다.
+ * 영수증 인식 때 이미 올렸다면 그 키를 그대로 쓴다. 그때 업로드가 실패했으면 여기서 다시 올린다.
  *
  * 업로드가 성공한 뒤 신청이 실패하면 저장소에 주인 없는 파일이 남는다. 지우지 않는다 —
  * 사용자가 다시 제출하면 새 키로 다시 올라가고, 남은 파일은 어느 지출에서도 참조되지 않는다.
@@ -116,12 +128,7 @@ export function useSpendings(eventId: number, status: SpendingStatus) {
 export async function submitSpending(eventId: number, spending: NewSpending) {
   const { evidence } = spending;
 
-  const { uploadUrl, storageKey } = await issueEvidenceUploadUrl(eventId, {
-    mimeType: evidence.mimeType,
-    fileSize: evidence.fileSize,
-  });
-
-  await uploadEvidenceFile(uploadUrl, evidence);
+  const storageKey = evidence.storageKey ?? await uploadEvidence(eventId, evidence);
 
   return createSpending(eventId, {
     amount: spending.amount,

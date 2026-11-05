@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Image,
   KeyboardAvoidingView,
   Modal,
@@ -15,7 +16,8 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 import { File } from 'expo-file-system';
 import type { EvidenceFile } from '../api/spending/uploadEvidenceFile';
-import type { NewSpending } from '../hooks/useSpendings';
+import { recognizeReceipt } from '../api/spending';
+import { uploadEvidence, type NewSpending } from '../hooks/useSpendings';
 import { SPENDING_TAGS, SPENDING_TAG_LABEL, type SpendingTag } from '../types/common';
 
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
@@ -43,13 +45,14 @@ function getCalendarDays(year: number, month: number): (number | null)[] {
  * 시각은 고르지 않는다. 서버가 지출일을 날짜까지만 보관하기 때문이다.
  * 시간을 입력받으면 사용자가 고른 값이 저장되지 않은 채 사라진다.
  */
-function DateSheet({ visible, onClose, onConfirm }: {
-  visible: boolean;
+function DateSheet({ initial, onClose, onConfirm }: {
+  /** yyyy-MM-dd. 비어 있으면 오늘. 영수증에서 읽은 날짜가 있으면 그 달을 연다. */
+  initial: string;
   onClose: () => void;
   /** yyyy-MM-dd */
   onConfirm: (spentOn: string) => void;
 }) {
-  const today = new Date();
+  const today = initial ? new Date(`${initial}T00:00:00`) : new Date();
   const [year, setYear] = useState(today.getFullYear());
   const [month, setMonth] = useState(today.getMonth());
   const [day, setDay] = useState(today.getDate());
@@ -75,8 +78,6 @@ function DateSheet({ visible, onClose, onConfirm }: {
   const handleConfirm = () => {
     onConfirm(`${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
   };
-
-  if (!visible) return null;
 
   return (
     <View style={dt.backdrop}>
@@ -136,18 +137,25 @@ function DateSheet({ visible, onClose, onConfirm }: {
 }
 
 type Props = {
+  eventId: number;
   visible: boolean;
   onClose: () => void;
   onSubmit: (data: NewSpending) => Promise<void>;
 };
 
-export default function UsageRegistrationModal({ visible, onClose, onSubmit }: Props) {
+export default function UsageRegistrationModal({ eventId, visible, onClose, onSubmit }: Props) {
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
   const [spentOn, setSpentOn] = useState('');
   const [tag, setTag] = useState<SpendingTag>('MEAL');
   const [otherDetail, setOtherDetail] = useState('');
-  const [receipt, setReceipt] = useState<EvidenceFile | null>(null);
+  const [receipt, setReceipt] = useState<NewSpending['evidence'] | null>(null);
+  const [isRecognizing, setIsRecognizing] = useState(false);
+  const [autoFilled, setAutoFilled] = useState(false);
+  // 태그는 기본값이 늘 선택돼 있어 빈 칸인지로 판단할 수 없다. 직접 누른 적이 없을 때만 인식 결과로 바꾼다.
+  const tagTouchedRef = useRef(false);
+  // 사진을 바꾸거나 닫거나 제출하면 늦게 온 인식 결과를 버린다.
+  const recognizeIdRef = useRef(0);
   const [receiptDropdownVisible, setReceiptDropdownVisible] = useState(false);
   const [dateVisible, setDateVisible] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -175,6 +183,46 @@ export default function UsageRegistrationModal({ visible, onClose, onSubmit }: P
     return { uri: asset.uri, mimeType, fileSize };
   };
 
+  /**
+   * 고른 영수증을 바로 올리고 AI로 읽어 빈 칸만 채운다.
+   *
+   * 실패해도 사용자에게 알리지 않는다. 인식은 보조 기능이고, 업로드가 실패했으면 제출 때 다시 올린다.
+   */
+  const recognize = async (evidence: EvidenceFile) => {
+    const id = ++recognizeIdRef.current;
+    const isStale = () => id !== recognizeIdRef.current;
+    setIsRecognizing(true);
+    setAutoFilled(false);
+
+    try {
+      const storageKey = await uploadEvidence(eventId, evidence);
+      if (isStale()) return;
+      setReceipt(current => (current?.uri === evidence.uri ? { ...current, storageKey } : current));
+
+      const result = await recognizeReceipt(eventId, storageKey);
+      if (isStale()) return;
+
+      const { amount: ocrAmount, spentOn: ocrSpentOn, merchantName, tag: ocrTag } = result;
+      if (ocrAmount != null) setAmount(prev => prev || ocrAmount.toLocaleString('ko-KR'));
+      if (merchantName) setDescription(prev => (prev.trim() ? prev : merchantName));
+      if (ocrSpentOn) setSpentOn(prev => prev || ocrSpentOn);
+      if (ocrTag && !tagTouchedRef.current) setTag(ocrTag);
+      setAutoFilled(Boolean(ocrAmount != null || merchantName || ocrSpentOn || ocrTag));
+    } catch {
+      // 위 주석대로 조용히 넘어간다.
+    } finally {
+      if (!isStale()) setIsRecognizing(false);
+    }
+  };
+
+  const selectReceipt = (asset: ImagePicker.ImagePickerAsset) => {
+    setError(null);
+    const evidence = toEvidence(asset);
+    if (!evidence) return;
+    setReceipt(evidence);
+    void recognize(evidence);
+  };
+
   const pickFromGallery = async () => {
     setReceiptDropdownVisible(false);
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -185,9 +233,7 @@ export default function UsageRegistrationModal({ visible, onClose, onSubmit }: P
     });
     if (result.canceled) return;
 
-    setError(null);
-    const evidence = toEvidence(result.assets[0]);
-    if (evidence) setReceipt(evidence);
+    selectReceipt(result.assets[0]);
   };
 
   const pickFromCamera = async () => {
@@ -197,9 +243,7 @@ export default function UsageRegistrationModal({ visible, onClose, onSubmit }: P
     const result = await ImagePicker.launchCameraAsync({ quality: 0.8 });
     if (result.canceled) return;
 
-    setError(null);
-    const evidence = toEvidence(result.assets[0]);
-    if (evidence) setReceipt(evidence);
+    selectReceipt(result.assets[0]);
   };
 
   // 증빙은 선택이 아니라 필수다. 기타 태그는 무엇에 썼는지가 사유만으로는 남지 않아 상세를 함께 받는다.
@@ -225,6 +269,10 @@ export default function UsageRegistrationModal({ visible, onClose, onSubmit }: P
     setTag('MEAL');
     setOtherDetail('');
     setReceipt(null);
+    recognizeIdRef.current++;
+    setIsRecognizing(false);
+    setAutoFilled(false);
+    tagTouchedRef.current = false;
     setReceiptDropdownVisible(false);
     setDateVisible(false);
     setError(null);
@@ -237,6 +285,9 @@ export default function UsageRegistrationModal({ visible, onClose, onSubmit }: P
 
     setIsSubmitting(true);
     setError(null);
+    // 제출 뒤 인식 결과가 와서 폼이 바뀌지 않게 한다.
+    recognizeIdRef.current++;
+    setIsRecognizing(false);
 
     try {
       await onSubmit({
@@ -308,6 +359,17 @@ export default function UsageRegistrationModal({ visible, onClose, onSubmit }: P
                     )}
                   </View>
 
+                  {isRecognizing && (
+                    <View style={styles.ocrRow}>
+                      <ActivityIndicator size="small" color="#403a6b" />
+                      <Text style={styles.ocrText}>영수증을 읽는 중이에요. 직접 입력해도 돼요.</Text>
+                    </View>
+                  )}
+                  {/* AI가 틀릴 수 있다. 사용자가 확인하고 고치도록 알린다. */}
+                  {!isRecognizing && autoFilled && (
+                    <Text style={[styles.ocrText, styles.ocrRow]}>자동 입력된 값을 확인해 주세요.</Text>
+                  )}
+
                   {/* 사용 금액 */}
                   <View style={styles.field}>
                     <Text style={styles.label}>사용 금액</Text>
@@ -358,7 +420,7 @@ export default function UsageRegistrationModal({ visible, onClose, onSubmit }: P
                         <TouchableOpacity
                           key={t}
                           style={[styles.tag, tag === t && styles.tagActive]}
-                          onPress={() => setTag(t)}
+                          onPress={() => { tagTouchedRef.current = true; setTag(t); }}
                           activeOpacity={0.7}
                         >
                           <Text style={[styles.tagText, tag === t && styles.tagTextActive]}>
@@ -403,17 +465,30 @@ export default function UsageRegistrationModal({ visible, onClose, onSubmit }: P
         </KeyboardAvoidingView>
 
         {/* DateSheet: KeyboardAvoidingView 바깥에서 absolute로 덮음 */}
-        <DateSheet
-          visible={dateVisible}
-          onClose={() => setDateVisible(false)}
-          onConfirm={(value) => { setSpentOn(value); setDateVisible(false); }}
-        />
+        {dateVisible && (
+          <DateSheet
+            initial={spentOn}
+            onClose={() => setDateVisible(false)}
+            onConfirm={(value) => { setSpentOn(value); setDateVisible(false); }}
+          />
+        )}
       </View>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
+  ocrRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: -8,
+    marginBottom: 16,
+  },
+  ocrText: {
+    fontSize: 12.5,
+    color: '#8a8a86',
+  },
   errorText: {
     fontSize: 12.5,
     color: '#c85c5c',
