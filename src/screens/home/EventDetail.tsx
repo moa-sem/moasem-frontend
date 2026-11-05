@@ -689,6 +689,7 @@ export default function EventDetail() {
       />
 
       <UsageRegistrationModal
+        eventId={eventId}
         visible={usageModalVisible}
         onClose={() => setUsageModalVisible(false)}
         onSubmit={handleRegisterSpending}
